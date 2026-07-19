@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\DEV\\Jarvis\\Jarvis\\Jarvis.csproj": {}
+    "D:\\DEV\\jar\\Jarvis\\Jarvis.csproj": {}
   },
   "projects": {
-    "D:\\DEV\\Jarvis\\Jarvis\\Jarvis.csproj": {
+    "D:\\DEV\\jar\\Jarvis\\Jarvis.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\DEV\\Jarvis\\Jarvis\\Jarvis.csproj",
+        "projectUniqueName": "D:\\DEV\\jar\\Jarvis\\Jarvis.csproj",
         "projectName": "Jarvis",
-        "projectPath": "D:\\DEV\\Jarvis\\Jarvis\\Jarvis.csproj",
+        "projectPath": "D:\\DEV\\jar\\Jarvis\\Jarvis.csproj",
         "packagesPath": "C:\\Users\\user\\.nuget\\packages\\",
-        "outputPath": "D:\\DEV\\Jarvis\\Jarvis\\obj\\",
+        "outputPath": "D:\\DEV\\jar\\Jarvis\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "D:\\Visual studio (all)\\oth\\NuGetPackages"
