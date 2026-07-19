@@ -1,0 +1,117 @@
+﻿{
+    "appAliases": {
+      "калькулятор": "calc",
+      "calculator": "calc",
+      "блокнот": "notepad",
+      "notepad": "notepad",
+      "браузер": "chrome",
+      "chrome": "chrome",
+      "edge": "msedge",
+      "диспетчер задач": "taskmgr",
+      "проводник": "explorer"
+    },
+  "commands": [
+    {
+      "name": "open_app",
+      "description": "Запустить приложение",
+      "parameters": {
+        "name": "имя приложения (calc, notepad, chrome, explorer и т.д.)"
+      },
+      "examples": [ "открой калькулятор", "запусти блокнот", "открой браузер" ]
+    },
+    {
+      "name": "close_app",
+      "description": "Закрыть приложение",
+      "parameters": {
+        "name": "имя приложения (calc, notepad и т.д.)"
+      },
+      "examples": [ "закрой калькулятор", "закрой блокнот" ]
+    },
+    {
+      "name": "open_url",
+      "description": "Открыть сайт в браузере",
+      "parameters": {
+        "url": "адрес сайта"
+      },
+      "examples": [ "открой google.com", "перейди на youtube.com" ]
+    },
+    {
+      "name": "lock_screen",
+      "description": "Заблокировать экран",
+      "parameters": {},
+      "examples": [ "заблокируй экран", "заблокируй компьютер" ]
+    },
+    {
+      "name": "shutdown",
+      "description": "Выключить компьютер",
+      "parameters": {},
+      "examples": [ "выключи компьютер", "выключи пк" ]
+    },
+    {
+      "name": "cancel_shutdown",
+      "description": "Отменить выключение",
+      "parameters": {},
+      "examples": [ "отмени выключение", "не выключай" ]
+    },
+    {
+      "name": "restart",
+      "description": "Перезагрузить компьютер",
+      "parameters": {},
+      "examples": [ "перезагрузи компьютер", "сделай рестарт" ]
+    },
+    {
+      "name": "open_explorer",
+      "description": "Открыть проводник",
+      "parameters": {
+        "path": "путь к папке (необязательно)"
+      },
+      "examples": [ "открой проводник", "открой папку документы" ]
+    },
+    {
+      "name": "open_calculator",
+      "description": "Открыть калькулятор",
+      "parameters": {},
+      "examples": [ "открой калькулятор", "запусти калькулятор" ]
+    },
+    {
+      "name": "open_notepad",
+      "description": "Открыть блокнот",
+      "parameters": {},
+      "examples": [ "открой блокнот", "создай текстовый файл" ]
+    },
+    {
+      "name": "open_task_manager",
+      "description": "Открыть диспетчер задач",
+      "parameters": {},
+      "examples": [ "открой диспетчер задач", "покажи процессы" ]
+    },
+    {
+      "name": "open_cmd",
+      "description": "Открыть командную строку",
+      "parameters": {},
+      "examples": [ "открой командную строку", "запусти cmd" ]
+    },
+    {
+      "name": "get_system_info",
+      "description": "Получить информацию о системе",
+      "parameters": {},
+      "examples": [ "покажи информацию о системе", "какие характеристики" ]
+    },
+    {
+      "name": "close_app",
+      "description": "Закрыть приложение",
+      "parameters": {
+        "name": "имя приложения (calculator, notepad, chrome и т.д.)"
+      },
+      "examples": [ "закрой калькулятор", "закрой блокнот", "закрой браузер" ]
+    },
+    {
+      "name": "run_cmd",
+      "description": "Выполнить безопасную команду в командной строке (только чтение информации: dir, ping, ipconfig, systeminfo). ЗАПРЕЩЕНО: del, format, rd, shutdown.",
+      "parameters": {
+        "command": "текст команды"
+      },
+      "examples": [ "узнай мой ip адрес", "покажи файлы в текущей папке", "проверь связь с google.com" ]
+    }
+  ]
+}
