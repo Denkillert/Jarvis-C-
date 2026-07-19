@@ -1,79 +1,149 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Jarvis
 {
     public static class SystemController
     {
-        public static string OpenApp(string processName)
+        // Приложения, которые обычно живут в трее
+        private static readonly string[] TrayApps = { "discord", "steam", "telegram" };
+
+        // WinAPI функции для работы с окнами и принудительного закрытия
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        private const int SW_RESTORE = 9;
+        private const uint WM_CLOSE = 0x0010;
+
+        public static string OpenApp(string appName)
         {
             try
             {
+                string fullPath = AppFinder.FindAppPath(appName);
+
+                if (!File.Exists(fullPath) || !fullPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"Ошибка: найденный файл не является исполняемым";
+                }
+
+                var processName = Path.GetFileNameWithoutExtension(fullPath).ToLower();
+                var existingProcesses = Process.GetProcessesByName(processName);
+
+                if (existingProcesses.Length > 0)
+                {
+                    foreach (var proc in existingProcesses)
+                    {
+                        if (proc.MainWindowHandle != IntPtr.Zero)
+                        {
+                            if (IsIconic(proc.MainWindowHandle))
+                            {
+                                ShowWindow(proc.MainWindowHandle, SW_RESTORE);
+                            }
+                            SetForegroundWindow(proc.MainWindowHandle);
+                            return $"Приложение {appName} развёрнуто";
+                        }
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"[OpenApp] Процесс в трее, запускаю повторно для разворачивания");
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = fullPath,
+                        UseShellExecute = true
+                    });
+                    return $"Приложение {appName} разворачивается";
+                }
+
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = processName,
+                    FileName = fullPath,
                     UseShellExecute = true
                 });
-                return $"Приложение запущено";
+
+                return $"Приложение {appName} запущено";
             }
             catch (Exception ex)
             {
-                return $"Не удалось запустить: {ex.Message}";
+                return $"Не удалось запустить {appName}: {ex.Message}";
             }
         }
 
-        public static string CloseApp(string appName)
+        // ДОБАВЛЕН параметр forceKill
+        public static string CloseApp(string appName, bool forceKill = false)
         {
             try
             {
-                var processName = appName.ToLower().Trim();
-
-                // Для калькулятора и других UWP приложений
-                if (processName.Contains("калькулятор") || processName.Contains("calculator") || processName == "calc")
-                {
-                    // Ищем процесс ApplicationFrameHost (хост для UWP приложений)
-                    var frameHosts = Process.GetProcessesByName("ApplicationFrameHost");
-                    foreach (var host in frameHosts)
-                    {
-                        // Проверяем, это калькулятор?
-                        if (host.MainWindowTitle.Contains("Калькулятор") ||
-                            host.MainWindowTitle.Contains("Calculator"))
-                        {
-                            host.Kill();
-                            return "Калькулятор закрыт";
-                        }
-                    }
-                    return "Калькулятор не найден";
-                }
-
-                // Для обычных приложений
+                var processName = Path.GetFileNameWithoutExtension(appName).ToLower();
                 var processes = Process.GetProcessesByName(processName);
+
                 if (processes.Length == 0)
                 {
                     return $"Приложение {appName} не запущено";
                 }
 
                 int closedCount = 0;
+                bool isTrayApp = TrayApps.Any(t => processName.Contains(t));
+
                 foreach (var proc in processes)
                 {
                     try
                     {
-                        if (!proc.CloseMainWindow())
+                        if (forceKill)
                         {
+                            // ПОЛНОЕ закрытие: убиваем процесс намертво
                             proc.Kill();
+                            closedCount++;
                         }
-                        closedCount++;
+                        else if (isTrayApp)
+                        {
+                            // Мягкое закрытие для трей-приложений (эмуляция крестика)
+                            if (proc.MainWindowHandle != IntPtr.Zero)
+                            {
+                                PostMessage(proc.MainWindowHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                                closedCount++;
+                            }
+                            else
+                            {
+                                // Если окна нет, но процесс есть, пробуем стандартное закрытие
+                                proc.CloseMainWindow();
+                                closedCount++;
+                            }
+                        }
+                        else
+                        {
+                            // Обычные приложения
+                            if (!proc.CloseMainWindow())
+                            {
+                                proc.Kill();
+                            }
+                            closedCount++;
+                        }
                     }
                     catch { }
                 }
 
-                return $"Закрыто {closedCount} экземпляр(ов)";
+                if (forceKill)
+                    return $"{appName} полностью закрыт (процесс завершён)";
+
+                return isTrayApp
+                    ? $"{appName} свёрнут в трей"
+                    : $"Закрыто {closedCount} экземпляр(ов) {appName}";
             }
             catch (Exception ex)
             {
-                return $"Не удалось закрыть: {ex.Message}";
+                return $"Не удалось закрыть {appName}: {ex.Message}";
             }
         }
 
@@ -136,30 +206,20 @@ namespace Jarvis
             }
         }
 
-        public static string GetSystemInfo()
-        {
-            var os = Environment.OSVersion;
-            var processorCount = Environment.ProcessorCount;
-            var memory = GC.GetTotalMemory(false) / 1024 / 1024;
-
-            return $"ОС: Windows {os.Version}\nПроцессоров: {processorCount}\nПамяти используется: {memory} МБ";
-        }
         public static string RunCmd(string command)
         {
             try
             {
-                // ЧЕРНЫЙ СПИСОК: блокируем опасные команды
                 var dangerousKeywords = new[] { "del", "erase", "format", "rd", "rmdir", "shutdown", "taskkill", "fsutil" };
                 if (dangerousKeywords.Any(k => command.ToLower().Contains(k)))
                 {
-                    return $" ОТКАЗ: Команда '{command}' заблокирована (опасное действие).";
+                    return $"⛔ ОТКАЗ: Команда '{command}' заблокирована (опасное действие).";
                 }
 
-                // Выполняем команду с UTF-8 кодировкой
                 var processInfo = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/c chcp 65001 >nul & {command}", // Переключаем на UTF-8
+                    Arguments = $"/c chcp 65001 >nul & {command}",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -171,7 +231,7 @@ namespace Jarvis
 
                 using (var process = Process.Start(processInfo))
                 {
-                    process.WaitForExit(10000); // Ждем 10 секунд
+                    process.WaitForExit(10000);
 
                     if (process.ExitCode == 0)
                     {
@@ -181,7 +241,7 @@ namespace Jarvis
                     else
                     {
                         string error = process.StandardError.ReadToEnd();
-                        return $"Ошибка выполнения: {error}";
+                        return $"Ошибка: {error}";
                     }
                 }
             }
@@ -189,6 +249,15 @@ namespace Jarvis
             {
                 return $"Критическая ошибка: {ex.Message}";
             }
+        }
+
+        public static string GetSystemInfo()
+        {
+            var os = Environment.OSVersion;
+            var processorCount = Environment.ProcessorCount;
+            var memory = GC.GetTotalMemory(false) / 1024 / 1024;
+
+            return $"ОС: Windows {os.Version}\nПроцессоров: {processorCount}\nПамяти используется: {memory} МБ";
         }
     }
 }

@@ -100,7 +100,13 @@ namespace Jarvis
                 string result = action.ToLower() switch
                 {
                     "open_app" => SystemController.OpenApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? "")),
-                    "close_app" => SystemController.CloseApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? "")),
+
+                    // Мягкое закрытие (сворачивание в трей для Discord/Steam)
+                    "close_app" => SystemController.CloseApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? ""), forceKill: false),
+
+                    // Полное закрытие (убивает процесс намертво)
+                    "force_close_app" => SystemController.CloseApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? ""), forceKill: true),
+
                     "open_url" => SystemController.OpenUrl(parameters.GetProperty("url").GetString() ?? ""),
                     "open_explorer" => SystemController.OpenExplorer(parameters.TryGetProperty("path", out var p) ? p.GetString() ?? "" : ""),
                     "run_cmd" => SystemController.RunCmd(parameters.GetProperty("command").GetString() ?? ""),
