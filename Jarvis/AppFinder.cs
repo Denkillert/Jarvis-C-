@@ -8,8 +8,28 @@ namespace Jarvis
 {
     public static class AppFinder
     {
-        // Кэш найденных приложений
         private static readonly Dictionary<string, string> _appCache = new();
+
+        // Системные команды Windows
+        private static readonly Dictionary<string, string> SystemCommands = new()
+        {
+            { "калькулятор", "calc.exe" },
+            { "кальк", "calc.exe" },
+            { "calc", "calc.exe" },
+            { "блокнот", "notepad.exe" },
+            { "notepad", "notepad.exe" },
+            { "проводник", "explorer.exe" },
+            { "explorer", "explorer.exe" },
+            { "диспетчер задач", "taskmgr.exe" },
+            { "taskmgr", "taskmgr.exe" },
+            { "cmd", "cmd.exe" },
+            { "командная строка", "cmd.exe" },
+            { "терминал", "wt.exe" },
+            { "powershell", "powershell.exe" },
+            { "браузер", GetDefaultBrowserPath() },
+            { "edge", "msedge.exe" },
+            { "chrome", "chrome.exe" }
+        };
 
         public static string FindAppPath(string appName)
         {
@@ -18,26 +38,23 @@ namespace Jarvis
             // Проверяем кэш
             if (_appCache.TryGetValue(lowerName, out var cachedPath))
             {
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Найдено в кэше: {lowerName} → {cachedPath}");
+                System.Diagnostics.Debug.WriteLine($"[AppFinder] Из кэша: {lowerName} → {cachedPath}");
                 return cachedPath;
             }
 
-            string foundPath = null;
-
-            // 1. Системные приложения
-            if (TryGetSystemApp(lowerName, out foundPath))
+            // 1. Проверяем системные команды
+            if (SystemCommands.TryGetValue(lowerName, out var sysCmd))
             {
-                _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Системное: {lowerName} → {foundPath}");
-                return foundPath;
+                _appCache[lowerName] = sysCmd;
+                System.Diagnostics.Debug.WriteLine($"[AppFinder] Системная команда: {lowerName} → {sysCmd}");
+                return sysCmd;
             }
 
             // 2. Ищем в реестре Uninstall
-            foundPath = FindInUninstallRegistry(lowerName);
+            string foundPath = FindInUninstallRegistry(lowerName);
             if (!string.IsNullOrEmpty(foundPath))
             {
                 _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Реестр Uninstall: {lowerName} → {foundPath}");
                 return foundPath;
             }
 
@@ -46,25 +63,22 @@ namespace Jarvis
             if (!string.IsNullOrEmpty(foundPath))
             {
                 _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] App Paths: {lowerName} → {foundPath}");
                 return foundPath;
             }
 
-            // 4. Ищем ярлыки в меню Пуск (ТОЛЬКО .exe, не .url)
+            // 4. Ищем ярлыки в меню Пуск
             foundPath = FindShortcutInStartMenu(lowerName);
             if (!string.IsNullOrEmpty(foundPath))
             {
                 _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Меню Пуск: {lowerName} → {foundPath}");
                 return foundPath;
             }
 
-            // 5. Ищем на рабочем столе (ТОЛЬКО .exe, не .url)
+            // 5. Ищем на рабочем столе
             foundPath = FindShortcutOnDesktop(lowerName);
             if (!string.IsNullOrEmpty(foundPath))
             {
                 _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Рабочий стол: {lowerName} → {foundPath}");
                 return foundPath;
             }
 
@@ -73,32 +87,12 @@ namespace Jarvis
             if (!string.IsNullOrEmpty(foundPath))
             {
                 _appCache[lowerName] = foundPath;
-                System.Diagnostics.Debug.WriteLine($"[AppFinder] Program Files: {lowerName} → {foundPath}");
                 return foundPath;
             }
 
-            System.Diagnostics.Debug.WriteLine($"[AppFinder] НЕ НАЙДЕНО: {lowerName}");
-            return appName;
-        }
-
-        private static bool TryGetSystemApp(string name, out string path)
-        {
-            var systemApps = new Dictionary<string, string>
-            {
-                { "калькулятор", "calc" },
-                { "calculator", "calc" },
-                { "блокнот", "notepad" },
-                { "проводник", "explorer" },
-                { "диспетчер задач", "taskmgr" },
-                { "cmd", "cmd" },
-                { "командная строка", "cmd" }
-            };
-
-            if (systemApps.TryGetValue(name, out path))
-                return true;
-
-            path = null;
-            return false;
+            // 7. Пробуем просто вернуть имя (вдруг это системная команда)
+            System.Diagnostics.Debug.WriteLine($"[AppFinder] Возвращаю как есть: {lowerName}");
+            return lowerName.EndsWith(".exe") ? lowerName : $"{lowerName}.exe";
         }
 
         private static string FindInUninstallRegistry(string appName)
@@ -107,8 +101,8 @@ namespace Jarvis
             {
                 var registryPaths = new[]
                 {
-            Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-            Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+                    Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+                    Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
                 };
 
                 foreach (var key in registryPaths)
@@ -127,16 +121,12 @@ namespace Jarvis
                                 !displayName.ToLower().Contains(appName))
                                 continue;
 
-                            System.Diagnostics.Debug.WriteLine($"[Registry] Найдено: {displayName} в {installLocation}");
+                            System.Diagnostics.Debug.WriteLine($"[Registry] Найдено: {displayName}");
 
                             if (!string.IsNullOrEmpty(installLocation) && Directory.Exists(installLocation))
                             {
-                                // Ищем exe рекурсивно во ВСЕХ подпапках
                                 var allExeFiles = Directory.GetFiles(installLocation, "*.exe", SearchOption.AllDirectories);
 
-                                System.Diagnostics.Debug.WriteLine($"[Registry] Найдено exe файлов: {allExeFiles.Length}");
-
-                                // Фильтруем: исключаем updater, uninstall, setup, helper, crashpad
                                 var badKeywords = new[] { "uninstall", "update", "setup", "helper", "crashpad", "service" };
 
                                 var candidates = allExeFiles
@@ -147,14 +137,6 @@ namespace Jarvis
                                     })
                                     .ToList();
 
-                                System.Diagnostics.Debug.WriteLine($"[Registry] Кандидатов после фильтрации: {candidates.Count}");
-
-                                foreach (var c in candidates)
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"[Registry] Кандидат: {c}");
-                                }
-
-                                // Приоритет 1: exe с именем приложения
                                 var bestMatch = candidates
                                     .FirstOrDefault(f => Path.GetFileNameWithoutExtension(f).ToLower().Contains(appName));
 
@@ -164,23 +146,20 @@ namespace Jarvis
                                     return bestMatch;
                                 }
 
-                                // Приоритет 2: любой оставшийся exe
                                 if (candidates.Count > 0)
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"[Registry] Берём первый кандидат: {candidates[0]}");
+                                    System.Diagnostics.Debug.WriteLine($"[Registry] Берём первый: {candidates[0]}");
                                     return candidates[0];
                                 }
                             }
 
-                            // DisplayIcon как запасной вариант (только .exe)
                             if (!string.IsNullOrEmpty(displayIcon))
                             {
                                 var iconPath = displayIcon.Split(',')[0].Trim();
                                 if (iconPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
                                     File.Exists(iconPath) &&
-                                    !Path.GetFileNameWithoutExtension(iconPath).ToLower().Contains("update"))
+                                    !Path.GetFileNameWithoutExtension(iconPath).ToLower().Contains("uninstall"))
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"[Registry] Через DisplayIcon: {iconPath}");
                                     return iconPath;
                                 }
                             }
@@ -213,7 +192,10 @@ namespace Jarvis
                                 {
                                     var path = subKey?.GetValue("") as string;
                                     if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"[App Paths] {appName} → {path}");
                                         return path;
+                                    }
                                 }
                             }
                         }
@@ -231,25 +213,23 @@ namespace Jarvis
             {
                 var startMenuPaths = new[]
                 {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs")
-        };
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs")
+                };
 
                 foreach (var basePath in startMenuPaths)
                 {
                     if (!Directory.Exists(basePath)) continue;
 
-                    // Ищем .lnk файлы
                     var shortcuts = Directory.GetFiles(basePath, $"*{appName}*.lnk", SearchOption.AllDirectories);
                     foreach (var shortcut in shortcuts)
                     {
                         var targetPath = GetShortcutTarget(shortcut);
-
-                        // ВАЖНО: Проверяем что это .exe, а не .url (веб-ссылка)
                         if (!string.IsNullOrEmpty(targetPath) &&
                             File.Exists(targetPath) &&
                             targetPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                         {
+                            System.Diagnostics.Debug.WriteLine($"[Start Menu] {appName} → {targetPath}");
                             return targetPath;
                         }
                     }
@@ -266,25 +246,23 @@ namespace Jarvis
             {
                 var desktopPaths = new[]
                 {
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory))
-        };
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory))
+                };
 
                 foreach (var desktopPath in desktopPaths)
                 {
                     if (!Directory.Exists(desktopPath)) continue;
 
-                    // Ищем .lnk файлы
                     var shortcuts = Directory.GetFiles(desktopPath, $"*{appName}*.lnk");
                     foreach (var shortcut in shortcuts)
                     {
                         var targetPath = GetShortcutTarget(shortcut);
-
-                        // Проверяем что это .exe
                         if (!string.IsNullOrEmpty(targetPath) &&
                             File.Exists(targetPath) &&
                             targetPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                         {
+                            System.Diagnostics.Debug.WriteLine($"[Desktop] {appName} → {targetPath}");
                             return targetPath;
                         }
                     }
@@ -310,16 +288,18 @@ namespace Jarvis
 
                 try
                 {
-                    // Ищем папку
                     var appDirs = Directory.GetDirectories(basePath, $"*{appName}*", SearchOption.TopDirectoryOnly);
 
                     foreach (var dir in appDirs)
                     {
                         var exeFiles = Directory.GetFiles(dir, "*.exe", SearchOption.AllDirectories);
-                        foreach (var exe in exeFiles.Take(5)) // Проверяем первые 5 exe
+                        foreach (var exe in exeFiles.Take(5))
                         {
                             if (Path.GetFileNameWithoutExtension(exe).ToLower().Contains(appName))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[Program Files] {appName} → {exe}");
                                 return exe;
+                            }
                         }
                     }
                 }
@@ -329,11 +309,37 @@ namespace Jarvis
             return null;
         }
 
+        private static string GetDefaultBrowserPath()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice"))
+                {
+                    var progId = key?.GetValue("ProgId") as string;
+                    if (!string.IsNullOrEmpty(progId))
+                    {
+                        using (var browserKey = Registry.ClassesRoot.OpenSubKey($@"{progId}\shell\open\command"))
+                        {
+                            var command = browserKey?.GetValue("") as string;
+                            if (!string.IsNullOrEmpty(command))
+                            {
+                                command = command.Replace("\"", "");
+                                var parts = command.Split(' ');
+                                return parts[0];
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return "explorer.exe";
+        }
+
         private static string GetShortcutTarget(string shortcutPath)
         {
             try
             {
-                // Используем WScript.Shell для чтения .lnk файлов
                 var shellType = Type.GetTypeFromProgID("WScript.Shell");
                 if (shellType == null) return null;
 
@@ -347,6 +353,11 @@ namespace Jarvis
             {
                 return null;
             }
+        }
+
+        public static void ClearCache()
+        {
+            _appCache.Clear();
         }
     }
 }

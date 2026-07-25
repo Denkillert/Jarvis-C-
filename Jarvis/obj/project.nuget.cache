@@ -1,8 +1,18 @@
 {
   "version": 2,
-  "dgSpecHash": "R0AnlhIFn48=",
+  "dgSpecHash": "wniU7kAGGzE=",
   "success": true,
   "projectFilePath": "D:\\DEV\\jar\\Jarvis\\Jarvis.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\user\\.nuget\\packages\\naudio\\2.3.0\\naudio.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.asio\\2.3.0\\naudio.asio.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.core\\2.3.0\\naudio.core.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.midi\\2.3.0\\naudio.midi.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.wasapi\\2.3.0\\naudio.wasapi.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.winforms\\2.3.0\\naudio.winforms.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\naudio.winmm\\2.3.0\\naudio.winmm.2.3.0.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\system.speech\\10.0.10\\system.speech.10.0.10.nupkg.sha512",
+    "C:\\Users\\user\\.nuget\\packages\\vosk\\0.3.38\\vosk.0.3.38.nupkg.sha512"
+  ],
   "logs": []
 }
