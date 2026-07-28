@@ -155,11 +155,14 @@ namespace Jarvis
         {
             try
             {
+                // Берём имя напрямую из JSON (например, "calc.exe")
+                string appName = parameters.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
+
                 string result = action.ToLower() switch
                 {
-                    "open_app" => SystemController.OpenApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? "")),
-                    "close_app" => SystemController.CloseApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? ""), forceKill: false),
-                    "force_close_app" => SystemController.CloseApp(_commandManager.GetProcessName(parameters.GetProperty("name").GetString() ?? ""), forceKill: true),
+                    "open_app" => SystemController.OpenApp(appName),
+                    "close_app" => SystemController.CloseApp(appName, forceKill: false),
+                    "force_close_app" => SystemController.CloseApp(appName, forceKill: true),
                     "open_url" => SystemController.OpenUrl(parameters.GetProperty("url").GetString() ?? ""),
                     "open_explorer" => SystemController.OpenExplorer(parameters.TryGetProperty("path", out var p) ? p.GetString() ?? "" : ""),
                     "run_cmd" => SystemController.RunCmd(parameters.GetProperty("command").GetString() ?? ""),
@@ -167,10 +170,6 @@ namespace Jarvis
                     "shutdown" => SystemController.Shutdown(),
                     "cancel_shutdown" => SystemController.CancelShutdown(),
                     "restart" => SystemController.Restart(),
-                    "open_calculator" => SystemController.OpenApp(_commandManager.GetProcessName("калькулятор")),
-                    "open_notepad" => SystemController.OpenApp(_commandManager.GetProcessName("блокнот")),
-                    "open_task_manager" => SystemController.OpenApp(_commandManager.GetProcessName("диспетчер задач")),
-                    "open_cmd" => SystemController.OpenApp("cmd"),
                     "get_system_info" => SystemController.GetSystemInfo(),
                     _ => $"Неизвестная команда: {action}"
                 };

@@ -11,25 +11,53 @@ namespace Jarvis
         private static readonly Dictionary<string, string> _appCache = new();
 
         // Системные команды Windows
-        private static readonly Dictionary<string, string> SystemCommands = new()
-        {
-            { "калькулятор", "calc.exe" },
-            { "кальк", "calc.exe" },
-            { "calc", "calc.exe" },
-            { "блокнот", "notepad.exe" },
-            { "notepad", "notepad.exe" },
-            { "проводник", "explorer.exe" },
-            { "explorer", "explorer.exe" },
-            { "диспетчер задач", "taskmgr.exe" },
-            { "taskmgr", "taskmgr.exe" },
-            { "cmd", "cmd.exe" },
-            { "командная строка", "cmd.exe" },
-            { "терминал", "wt.exe" },
-            { "powershell", "powershell.exe" },
-            { "браузер", GetDefaultBrowserPath() },
-            { "edge", "msedge.exe" },
-            { "chrome", "chrome.exe" }
-        };
+        private static readonly Dictionary<string, string> SystemCommands = new(StringComparer.OrdinalIgnoreCase)
+{
+    // Калькулятор - все варианты
+    { "калькулятор", "calc.exe" },
+    { "кальк", "calc.exe" },
+    { "калькулятор.exe", "calc.exe" },
+    { "calc", "calc.exe" },
+    { "calc.exe", "calc.exe" },
+    { "calculator", "calc.exe" },
+    
+    // Блокнот
+    { "блокнот", "notepad.exe" },
+    { "notepad", "notepad.exe" },
+    { "notepad.exe", "notepad.exe" },
+    
+    // Проводник
+    { "проводник", "explorer.exe" },
+    { "explorer", "explorer.exe" },
+    { "explorer.exe", "explorer.exe" },
+    { "папка", "explorer.exe" },
+    { "файлы", "explorer.exe" },
+    
+    // Диспетчер задач
+    { "диспетчер задач", "taskmgr.exe" },
+    { "taskmgr", "taskmgr.exe" },
+    { "taskmgr.exe", "taskmgr.exe" },
+    { "диспетчер", "taskmgr.exe" },
+    
+    // Командная строка
+    { "cmd", "cmd.exe" },
+    { "cmd.exe", "cmd.exe" },
+    { "командная строка", "cmd.exe" },
+    { "консоль", "cmd.exe" },
+    { "терминал", "wt.exe" },
+    { "wt", "wt.exe" },
+    { "powershell", "powershell.exe" },
+    { "ps", "powershell.exe" },
+    
+    // Браузеры
+    { "браузер", GetDefaultBrowserPath() },
+    { "edge", "msedge.exe" },
+    { "microsoft edge", "msedge.exe" },
+    { "chrome", "chrome.exe" },
+    { "google chrome", "chrome.exe" },
+    { "firefox", "firefox.exe" },
+    { "opera", "opera.exe" }
+};
 
         public static string FindAppPath(string appName)
         {

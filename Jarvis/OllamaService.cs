@@ -28,37 +28,43 @@ namespace Jarvis
         private string GetSystemPrompt()
         {
             return $@"Ты — Джарвис, интеллектуальный и лаконичный ассистент. 
-Ты отвечаешь ТОЛЬКО валидным JSON-объектом следующей структуры:
-{{
-  ""text"": ""Краткий ответ пользователю на русском языке. Если выполняешь команду, напиши что-то вроде 'Выполняю'. Если команды нет, просто ответь на вопрос."",
-  ""action"": ""имя_команды_из_списка_ниже_или_пустая_строка"",
-  ""parameters"": {{}} 
-}}
+            Ты отвечаешь ТОЛЬКО валидным JSON-объектом. Никакого markdown, никаких слов до или после фигурных скобок.
 
-ДОСТУПНЫЕ ДЕЙСТВИЯ (action):
-{_commandManager.GetCommandsDescription()}
+            Структура твоего ответа:
+            {{
+              ""text"": ""Краткий ответ пользователю на русском языке."",
+              ""action"": ""имя_команды_или_пустая_строка"",
+              ""parameters"": {{}} 
+            }}
 
-ПРИМЕР 1 (просто разговор):
-Пользователь: ""Привет""
-Твой ответ: {{""text"": ""Привет! Системы в норме."", ""action"": """", ""parameters"": {{}}}}
+            ДОСТУПНЫЕ ДЕЙСТВИЯ (action):
+            {_commandManager.GetCommandsDescription()}
 
-ПРИМЕР 2 (действие):
-Пользователь: ""Открой калькулятор""
-Твой ответ: {{""text"": ""Запускаю калькулятор."", ""action"": ""open_calculator"", ""parameters"": {{}}}}
+            КРИТИЧЕСКИ ВАЖНОЕ ПРАВИЛО ДЛЯ open_app И close_app:
+            В параметре ""name"" указывай РЕАЛЬНОЕ имя процесса (exe-файла). Вот справочник:
+            - Калькулятор → ""CalculatorApp.exe"" (НЕ calc.exe!)
+            - Блокнот → ""notepad.exe""
+            - Проводник → ""explorer.exe""
+            - Диспетчер задач → ""Taskmgr.exe""
+            - Discord → ""Discord.exe""
+            - Steam → ""steam.exe""
+            - Telegram → ""Telegram.exe""
+            - Браузер Edge → ""msedge.exe""
+            - Браузер Chrome → ""chrome.exe""
 
-ПРИМЕР 3 (действие с параметром):
-Пользователь: ""Какой у меня IP?""
-Твой ответ: {{""text"": ""Проверяю настройки сети."", ""action"": ""run_cmd"", ""parameters"": {{""command"": ""ipconfig""}}}}
+            ПРИМЕРЫ ПРАВИЛЬНЫХ ОТВЕТОВ:
 
-Пользователь: ""Запусти дискорд""
-Ты: {{""text"": ""Запускаю Discord."", ""action"": ""open_app"", ""parameters"": {{""name"": ""discord""}}}}
+            Пользователь: ""Открой калькулятор""
+            Ты: {{""text"": ""Запускаю калькулятор."", ""action"": ""open_app"", ""parameters"": {{""name"": ""CalculatorApp.exe""}}}}
 
-Пользователь: ""Открой стим""
-Ты: {{""text"": ""Открываю Steam."", ""action"": ""open_app"", ""parameters"": {{""name"": ""steam""}}}}
+            Пользователь: ""Закрой калькулятор""
+            Ты: {{""text"": ""Закрываю калькулятор."", ""action"": ""close_app"", ""parameters"": {{""name"": ""CalculatorApp.exe""}}}}
 
-ВАЖНО: 
-- Твой ответ ДОЛЖЕН быть ТОЛЬКО этим JSON. Никакого markdown, никаких слов до или после фигурных скобок.
-- Если действие не требуется, поле ""action"" должно быть пустой строкой """".";
+            Пользователь: ""Открой блокнот""
+            Ты: {{""text"": ""Открываю блокнот."", ""action"": ""open_app"", ""parameters"": {{""name"": ""notepad.exe""}}}}
+
+            Пользователь: ""Закрой дискорд""
+            Ты: {{""text"": ""Закрываю Discord."", ""action"": ""close_app"", ""parameters"": {{""name"": ""Discord.exe""}}}}";
         }
 
         public async Task<AgentResponse> AskAsync(string question)
@@ -72,7 +78,7 @@ namespace Jarvis
                     model = _model,
                     messages = _history,
                     stream = false,
-                    format = "json", // Заставляет модель генерировать только JSON внутри content
+                    format = "json",
                     options = new
                     {
                         num_ctx = 4096,
@@ -90,27 +96,21 @@ namespace Jarvis
                 response.EnsureSuccessStatusCode();
 
                 var responseJson = await response.Content.ReadAsStringAsync();
-
-                // ЭТАП 1: Десериализуем обёртку ответа Ollama API
                 var ollamaResponse = JsonSerializer.Deserialize<OllamaApiResponse>(responseJson);
 
                 if (ollamaResponse?.message?.content != null)
                 {
-                    // ЭТАП 2: Извлекаем строку content (которая должна быть нашим JSON)
                     string jsonContent = ollamaResponse.message.content.Trim();
 
-                    // На всякий случай чистим от markdown-обёрток, если модель всё же их добавила
                     if (jsonContent.StartsWith("```json")) jsonContent = jsonContent.Substring(7);
                     if (jsonContent.StartsWith("```")) jsonContent = jsonContent.Substring(3);
                     if (jsonContent.EndsWith("```")) jsonContent = jsonContent.Substring(0, jsonContent.Length - 3);
                     jsonContent = jsonContent.Trim();
 
-                    // ЭТАП 3: Десериализуем чистый JSON в наш AgentResponse
                     var result = JsonSerializer.Deserialize<AgentResponse>(jsonContent);
 
                     if (result != null)
                     {
-                        // Сохраняем в историю только текстовую часть, чтобы не засорять контекст
                         if (!string.IsNullOrEmpty(result.text))
                         {
                             _history.Add(new ChatMessage { role = "assistant", content = result.text });
@@ -140,7 +140,6 @@ namespace Jarvis
             public string content { get; set; } = "";
         }
 
-        // Вспомогательный класс для парсинга сырого ответа от Ollama API
         private class OllamaApiResponse
         {
             public MessageData message { get; set; }
@@ -153,7 +152,6 @@ namespace Jarvis
         }
     }
 
-    // Публичный класс для использования в MainWindow
     public class AgentResponse
     {
         public string text { get; set; } = "";

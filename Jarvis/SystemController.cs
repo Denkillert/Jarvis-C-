@@ -9,10 +9,10 @@ namespace Jarvis
 {
     public static class SystemController
     {
-        // Приложения, которые обычно живут в трее
+        // Приложения которые закрываются в трей
         private static readonly string[] TrayApps = { "discord", "steam", "telegram" };
 
-        // WinAPI функции для работы с окнами и принудительного закрытия
+        // WinAPI функции
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
@@ -32,47 +32,39 @@ namespace Jarvis
         {
             try
             {
-                string fullPath = AppFinder.FindAppPath(appName);
+                System.Diagnostics.Debug.WriteLine($"[OpenApp] Запуск: {appName}");
 
-                if (!File.Exists(fullPath) || !fullPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                var processName = Path.GetFileNameWithoutExtension(appName);
+                var existing = Process.GetProcessesByName(processName);
+
+                if (existing.Length > 0)
                 {
-                    return $"Ошибка: найденный файл не является исполняемым";
-                }
-
-                var processName = Path.GetFileNameWithoutExtension(fullPath).ToLower();
-                var existingProcesses = Process.GetProcessesByName(processName);
-
-                if (existingProcesses.Length > 0)
-                {
-                    foreach (var proc in existingProcesses)
+                    foreach (var proc in existing)
                     {
                         if (proc.MainWindowHandle != IntPtr.Zero)
                         {
                             if (IsIconic(proc.MainWindowHandle))
-                            {
                                 ShowWindow(proc.MainWindowHandle, SW_RESTORE);
-                            }
                             SetForegroundWindow(proc.MainWindowHandle);
-                            return $"Приложение {appName} развёрнуто";
+                            return $"{appName} уже запущен и развёрнут";
                         }
                     }
 
-                    System.Diagnostics.Debug.WriteLine($"[OpenApp] Процесс в трее, запускаю повторно для разворачивания");
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = fullPath,
+                        FileName = appName,
                         UseShellExecute = true
                     });
-                    return $"Приложение {appName} разворачивается";
+                    return $"{appName} разворачивается";
                 }
 
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = fullPath,
+                    FileName = appName,
                     UseShellExecute = true
                 });
 
-                return $"Приложение {appName} запущено";
+                return $"{appName} запущен";
             }
             catch (Exception ex)
             {
@@ -80,66 +72,61 @@ namespace Jarvis
             }
         }
 
-        // ДОБАВЛЕН параметр forceKill
         public static string CloseApp(string appName, bool forceKill = false)
         {
             try
             {
-                var processName = Path.GetFileNameWithoutExtension(appName).ToLower();
+                var processName = Path.GetFileNameWithoutExtension(appName);
                 var processes = Process.GetProcessesByName(processName);
 
                 if (processes.Length == 0)
                 {
-                    return $"Приложение {appName} не запущено";
+                    processName = appName.Replace(".exe", "");
+                    processes = Process.GetProcessesByName(processName);
                 }
 
-                int closedCount = 0;
-                bool isTrayApp = TrayApps.Any(t => processName.Contains(t));
+                if (processes.Length == 0)
+                    return $"{appName} не запущен";
 
+                int closed = 0;
                 foreach (var proc in processes)
                 {
                     try
                     {
                         if (forceKill)
                         {
-                            // ПОЛНОЕ закрытие: убиваем процесс намертво
                             proc.Kill();
-                            closedCount++;
-                        }
-                        else if (isTrayApp)
-                        {
-                            // Мягкое закрытие для трей-приложений (эмуляция крестика)
-                            if (proc.MainWindowHandle != IntPtr.Zero)
-                            {
-                                PostMessage(proc.MainWindowHandle, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-                                closedCount++;
-                            }
-                            else
-                            {
-                                // Если окна нет, но процесс есть, пробуем стандартное закрытие
-                                proc.CloseMainWindow();
-                                closedCount++;
-                            }
+                            closed++;
                         }
                         else
                         {
-                            // Обычные приложения
-                            if (!proc.CloseMainWindow())
+                            if (proc.MainWindowHandle != IntPtr.Zero)
+                            {
+                                if (!proc.CloseMainWindow())
+                                {
+                                    System.Threading.Thread.Sleep(500);
+                                    if (!proc.HasExited)
+                                        proc.Kill();
+                                }
+                                closed++;
+                            }
+                            else
                             {
                                 proc.Kill();
+                                closed++;
                             }
-                            closedCount++;
                         }
                     }
                     catch { }
                 }
 
                 if (forceKill)
-                    return $"{appName} полностью закрыт (процесс завершён)";
+                    return $"{appName} полностью закрыт";
 
-                return isTrayApp
-                    ? $"{appName} свёрнут в трей"
-                    : $"Закрыто {closedCount} экземпляр(ов) {appName}";
+                if (TrayApps.Any(t => processName.Contains(t)))
+                    return $"{appName} свёрнут в трей";
+
+                return $"Закрыто {closed} экземпляр(ов) {appName}";
             }
             catch (Exception ex)
             {
