@@ -26,32 +26,70 @@ namespace Jarvis
         {
             return @"Ты — Джарвис, голосовой ассистент. Отвечай кратко на русском языке.
 
-ЕСЛИ пользователь просит выполнить действие (открыть приложение, закрыть, запустить, узнать время/дату, открыть сайт) — отвечай СТРОГО в формате JSON:
-{""action"": ""имя_команды"", ""parameters"": {""name"": ""имя.exe""}, ""text"": ""краткий ответ""}
+ЕСЛИ пользователь просит выполнить действие — отвечай СТРОГО в формате JSON:
+{""action"": ""имя_команды"", ""parameters"": {...}, ""text"": ""краткий ответ""}
 
 ДОСТУПНЫЕ КОМАНДЫ:
-- open_app: {""name"": ""CalculatorApp.exe""} (калькулятор), {""name"": ""Discord.exe""}, {""name"": ""Telegram.exe""}, {""name"": ""notepad.exe""}
-- close_app: {""name"": ""имя.exe""}
-- focus_app: {""name"": ""имя.exe""} (развернуть)
+- open_app: {""name"": ""каноническое имя приложения МАЛЕНЬКИМИ латинскими буквами, БЕЗ .exe""}
+- close_app: {""name"": ""то же самое""}
+- focus_app: {""name"": ""то же самое""}
 - open_url: {""url"": ""https://...""}
 - get_time: {} (верни время в поле text)
 - get_date: {} (верни дату в поле text)
 - run_cmd: {""command"": ""команда""}
 
+ВАЖНО ПРО ИМЕНА ПРИЛОЖЕНИЙ! Понимай смысл, а не транскрипцию:
+""стим"", ""стиме"", ""steam"" → name: ""steam""
+""телеграм"", ""телега"" → name: ""telegram""
+""дискорд"" → name: ""discord""
+""хром"", ""гугл"" → name: ""chrome""
+""калькулятор"" → name: ""calc""
+""блокнот"" → name: ""notepad""
+Система сама найдёт путь в реестре — тебе нужно только понять, КАКОЕ приложение имеют в виду.
+
 ИНАЧЕ — отвечай обычным текстом, без JSON.
 
 ПРИМЕРЫ:
+Пользователь: ""Открой стим""
+Ты: {""action"": ""open_app"", ""parameters"": {""name"": ""steam""}, ""text"": ""Открываю Steam""}
+
 Пользователь: ""Привет""
-Ты: Привет! Чем могу помочь?
+Ты: Привет! Чем могу помочь?";
+        }
 
-Пользователь: ""Открой калькулятор""
-Ты: {""action"": ""open_app"", ""parameters"": {""name"": ""CalculatorApp.exe""}, ""text"": ""Открываю калькулятор""}
+        /// <summary>
+        /// Отправляет произвольный текст в LLM БЕЗ использования истории
+        /// Используется для внутренних задач (очистка текста, генерация)
+        /// </summary>
+        public async Task<string> AskRawAsync(string prompt, double temperature = 0.3)
+        {
+            try
+            {
+                var requestBody = new
+                {
+                    model = _model,
+                    messages = new[]
+                    {
+                        new ChatMessage { role = "user", content = prompt }
+                    },
+                    stream = false,
+                    options = new { temperature }
+                };
 
-Пользователь: ""Какое время?""
-Ты: {""action"": ""get_time"", ""parameters"": {}, ""text"": ""Сейчас 14:30""}
+                var json = JsonSerializer.Serialize(requestBody);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync(_endpoint, content);
+                response.EnsureSuccessStatusCode();
 
-Пользователь: ""Расскажи шутку""
-Ты: Почему программисты путают Хэллоуин и Рождество? Потому что 31 OCT = 25 DEC";
+                var responseJson = await response.Content.ReadAsStringAsync();
+                var ollamaResponse = JsonSerializer.Deserialize<OllamaApiResponse>(responseJson);
+
+                return ollamaResponse?.message?.content?.Trim() ?? "";
+            }
+            catch (Exception ex)
+            {
+                return $"Ошибка: {ex.Message}";
+            }
         }
 
         public async Task<AgentResponse> AskAsync(string question)
@@ -123,6 +161,13 @@ namespace Jarvis
             {
                 return new AgentResponse { text = $"Ошибка: {ex.Message}" };
             }
+        }
+
+        public void ClearHistory()
+        {
+            var systemMessage = _history[0];
+            _history.Clear();
+            _history.Add(systemMessage);
         }
 
         private class ChatMessage { public string role { get; set; } = ""; public string content { get; set; } = ""; }

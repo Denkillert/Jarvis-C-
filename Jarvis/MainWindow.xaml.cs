@@ -12,6 +12,11 @@ namespace Jarvis
     {
         private readonly OllamaService _ollama;
         private readonly VoiceController _voice;
+        private readonly VADService _vad;
+        private readonly TextEnhancer _textEnhancer;
+        private readonly IntelligentCommandParser _commandParser;
+        private readonly ContextDetector _contextDetector;
+
         private bool _isProcessing = false;
         private bool _isMicOn = false;
 
@@ -19,9 +24,34 @@ namespace Jarvis
         {
             InitializeComponent();
 
+            // === Инициализация сервисов ===
             _ollama = new OllamaService("qwen2.5:3b");
             _voice = new VoiceController();
+            _vad = new VADService();
+            _textEnhancer = new TextEnhancer(_ollama);
+            _commandParser = new IntelligentCommandParser();
+            _contextDetector = new ContextDetector();
 
+            // === VAD события (визуальная индикация) ===
+            _vad.OnSpeechStart += () =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    StatusLabel.Text = "🎙 Слушаю...";
+                    StatusLabel.Foreground = Brushes.Lime;
+                });
+            };
+
+            _vad.OnSpeechEnd += () =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    StatusLabel.Text = "⏸ Ожидание...";
+                    StatusLabel.Foreground = Brushes.Gray;
+                });
+            };
+
+            // === Голосовые события ===
             _voice.OnWakeWordDetected += () =>
             {
                 Dispatcher.Invoke(async () =>
@@ -31,16 +61,26 @@ namespace Jarvis
                 });
             };
 
-            _voice.OnCommandRecognized += async (text) =>
+            _voice.OnCommandRecognized += async (rawText) =>
             {
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    InputBox.Text = text;
+                    var corrected = RecognitionCorrector.Correct(rawText);
+                    var enhancedText = await _textEnhancer.EnhanceAsync(corrected);
+                    InputBox.Text = enhancedText;
                     await ProcessMessage();
                 });
             };
 
+            // === Привязываем VAD к VoiceController ===
+            _voice.OnAudioDataAvailable += (buffer, bytesRecorded) =>
+            {
+                _vad.ProcessAudio(buffer, bytesRecorded);
+            };
+
             AddMessage("Джарвис", "Система готова. Скажите 'Джарвис' для активации.", Brushes.LightGreen);
+            StatusLabel.Text = "⏸ Ожидание...";
+            StatusLabel.Foreground = Brushes.Gray;
 
             _voice.StartListening();
             _isMicOn = true;
@@ -59,6 +99,7 @@ namespace Jarvis
             {
                 _voice.StopListening();
                 MicButton.Background = (Brush)new BrushConverter().ConvertFrom("#3E3E42");
+                _vad.Reset();
             }
         }
 
@@ -92,36 +133,62 @@ namespace Jarvis
 
             try
             {
-                AgentResponse response = await _ollama.AskAsync(text);
-                ChatParagraph.Inlines.Remove(thinkingRun);
+                string responseText = null;
 
-                // 🔥 ВЫПОЛНЯЕМ ДЕЙСТВИЕ И ПОЛУЧАЕМ РЕЗУЛЬТАТ
-                string toolResult = null;
-                if (!string.IsNullOrWhiteSpace(response.action))
+                // === ШАГ 1: Пробуем быстрый парсер (без LLM) ===
+                var parsed = _commandParser.Parse(text);
+                if (parsed != null && parsed.Confidence >= 0.85)
                 {
-                    toolResult = await ExecuteTool(response.action, response.parameters);
-                }
+                    ChatParagraph.Inlines.Remove(thinkingRun);
 
-                // 🔥 ОПРЕДЕЛЯЕМ ЧТО ГОВОРИТЬ:
-                string responseText;
+                    var jsonParams = JsonSerializer.SerializeToElement(parsed.Parameters);
+                    var toolResult = await ExecuteTool(parsed.Action, jsonParams);
 
-                // Если инструмент вернул результат (время, дата, команды) — используем его
-                if (!string.IsNullOrWhiteSpace(toolResult) &&
-                    (response.action.ToLower() == "get_time" ||
-                     response.action.ToLower() == "get_date" ||
-                     response.action.ToLower() == "run_cmd"))
-                {
-                    responseText = toolResult;
+                    // Для get_time/get_date используем результат инструмента
+                    if (parsed.Action == "get_time" || parsed.Action == "get_date")
+                    {
+                        responseText = toolResult ?? "Не удалось получить информацию.";
+                    }
+                    else if (parsed.Action == "run_cmd")
+                    {
+                        responseText = toolResult;
+                    }
+                    else
+                    {
+                        responseText = toolResult ?? "Готово.";
+                    }
                 }
-                // Иначе используем текст от нейросети
-                else if (!string.IsNullOrWhiteSpace(response.text))
-                {
-                    responseText = response.text;
-                }
-                // Или результат инструмента
                 else
                 {
-                    responseText = toolResult;
+                    // === ШАГ 2: Отправляем в LLM с контекстом ===
+                    var context = _contextDetector.GetCurrentContext();
+
+                    AgentResponse response = await _ollama.AskAsync(text);
+                    ChatParagraph.Inlines.Remove(thinkingRun);
+
+                    // Выполняем действие если LLM его определил
+                    string toolResult = null;
+                    if (!string.IsNullOrWhiteSpace(response.action))
+                    {
+                        toolResult = await ExecuteTool(response.action, response.parameters);
+                    }
+
+                    // Определяем что говорить
+                    if (!string.IsNullOrWhiteSpace(toolResult) &&
+                        (response.action.ToLower() == "get_time" ||
+                         response.action.ToLower() == "get_date" ||
+                         response.action.ToLower() == "run_cmd"))
+                    {
+                        responseText = toolResult;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(response.text))
+                    {
+                        responseText = response.text;
+                    }
+                    else
+                    {
+                        responseText = toolResult;
+                    }
                 }
 
                 // Говорим ответ
@@ -155,6 +222,15 @@ namespace Jarvis
         {
             try
             {
+                await Task.CompletedTask;
+
+                // 🔥 ЗАЩИТА: если нейросеть не вернула "parameters", JsonElement пустой (Undefined)
+                // и TryGetProperty бросает "Operation is not valid due to the current state of the object"
+                if (parameters.ValueKind != JsonValueKind.Object)
+                {
+                    parameters = JsonSerializer.SerializeToElement(new Dictionary<string, string>());
+                }
+
                 string appName = parameters.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
                 string url = parameters.TryGetProperty("url", out var urlProp) ? urlProp.GetString() ?? "" : "";
                 string command = parameters.TryGetProperty("command", out var cmdProp) ? cmdProp.GetString() ?? "" : "";
@@ -172,12 +248,11 @@ namespace Jarvis
                     "volume_up" => SystemController.VolumeUp(),
                     "volume_down" => SystemController.VolumeDown(),
                     "volume_mute" => SystemController.VolumeMute(),
-                    "get_time" => DateTime.Now.ToString("HH:mm"),
-                    "get_date" => DateTime.Now.ToString("dd MMMM yyyy"),
+                    "get_time" => SystemController.GetTime(),
+                    "get_date" => SystemController.GetDate(),
                     _ => null
                 };
 
-                // Показываем системное сообщение только для действий с приложениями
                 if (!string.IsNullOrWhiteSpace(result) &&
                     action.ToLower() != "get_time" &&
                     action.ToLower() != "get_date")
@@ -192,7 +267,6 @@ namespace Jarvis
                 AddMessage("Джарвис", $"[Ошибка]: {ex.Message}", Brushes.Red);
                 return null;
             }
-            await Task.CompletedTask;
         }
 
         private void AddMessage(string sender, string text, Brush color)

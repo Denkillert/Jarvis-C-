@@ -31,71 +31,53 @@ namespace Jarvis
         private const int SW_RESTORE = 9;
 
         // ===== ОТКРЫТЬ ПРИЛОЖЕНИЕ =====
+        // ===== ОТКРЫТЬ ПРИЛОЖЕНИЕ (умный поиск пути) =====
         public static string OpenApp(string appName)
         {
             try
             {
-                var processName = Path.GetFileNameWithoutExtension(appName);
+                // 🔥 Сначала ищем реальный путь: реестр → ярлыки → папки
+                string path = AppResolver.Resolve(appName);
 
-                // Если уже запущено - просто запускаем exe снова (приложение само развернется)
-                if (Process.GetProcessesByName(processName).Length > 0)
+                if (path != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[SystemController] Уже запущено, запускаю снова для разворачивания: {appName}");
+                    Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+                    return $"Запустил {Path.GetFileNameWithoutExtension(path)}.";
                 }
 
-                // Ищем полный путь
-                string fullPath = FindExecutablePath(appName);
-
-                if (!string.IsNullOrEmpty(fullPath) && File.Exists(fullPath))
-                {
-                    Process.Start(new ProcessStartInfo { FileName = fullPath, UseShellExecute = true });
-                    return $"{appName} запущен.";
-                }
-
-                // Пробуем по имени
-                Process.Start(new ProcessStartInfo { FileName = appName, UseShellExecute = true });
+                // Запасной вариант: системные утилиты (notepad, calc, mspaint)
+                var shellName = appName.EndsWith(".exe") ? appName : appName + ".exe";
+                Process.Start(new ProcessStartInfo { FileName = shellName, UseShellExecute = true });
                 return $"{appName} запущен.";
             }
-            catch (Exception ex)
+            catch
             {
-                return $"Не удалось запустить {appName}: {ex.Message}";
+                return $"Не нашёл приложение '{appName}' на этом компьютере. Проверь, что оно установлено.";
             }
         }
 
-        // ===== РАЗВЕРНУТЬ - ПРОСТО ЗАПУСКАЕМ EXE СНОВА =====
-            public static string FocusApp(string appName)
+        // ===== РАЗВЕРНУТЬ =====
+        public static string FocusApp(string appName)
         {
             try
             {
-                var processName = Path.GetFileNameWithoutExtension(appName);
-                var processes = Process.GetProcessesByName(processName);
-
-                // Фикс для UWP калькулятора
-                if (processes.Length == 0 &&
-                    (processName.Equals("calc", StringComparison.OrdinalIgnoreCase) ||
-                     processName.Equals("calculatorapp", StringComparison.OrdinalIgnoreCase)))
-                {
-                    processes = Process.GetProcessesByName("CalculatorApp");
-                }
+                var processName = AppResolver.GetProcessName(appName);
+                var processes = GetProcessesByNameSmart(processName);
 
                 if (processes.Length == 0)
-                {
-                    // Не запущено — запускаем
-                    return OpenApp(appName);
-                }
+                    return OpenApp(appName); // Не запущено — запускаем
 
-                // Запущено — ищем окно с MainWindowHandle
                 foreach (var proc in processes)
                 {
                     if (proc.MainWindowHandle != IntPtr.Zero)
                     {
+                        if (IsIconic(proc.MainWindowHandle))
+                            ShowWindow(proc.MainWindowHandle, SW_RESTORE);
                         SetForegroundWindow(proc.MainWindowHandle);
                         return $"{appName} развёрнут.";
                     }
                 }
 
-                // Если у всех процессов MainWindowHandle = null (как у Discord)
-                // Просто запускаем exe снова — приложение само разберётся
                 return OpenApp(appName);
             }
             catch (Exception ex)
@@ -109,7 +91,7 @@ namespace Jarvis
         {
             try
             {
-                var processName = Path.GetFileNameWithoutExtension(appName);
+                var processName = AppResolver.GetProcessName(appName);
                 var processes = GetProcessesByNameSmart(processName);
 
                 if (processes.Length == 0) return $"{appName} не запущен.";
@@ -210,117 +192,6 @@ namespace Jarvis
             return processes;
         }
 
-        // ===== УНИВЕРСАЛЬНЫЙ ПОИСК EXE =====
-        private static string FindExecutablePath(string appName)
-        {
-            var searchName = Path.GetFileNameWithoutExtension(appName).ToLower();
-
-            // 1. App Paths реестр
-            try
-            {
-                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"))
-                {
-                    if (key != null)
-                    {
-                        foreach (var subKeyName in key.GetSubKeyNames())
-                        {
-                            if (subKeyName.ToLower().Contains(searchName))
-                            {
-                                using (var subKey = key.OpenSubKey(subKeyName))
-                                {
-                                    var path = subKey?.GetValue("") as string;
-                                    if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                                        return path;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            // 2. Uninstall реестр
-            try
-            {
-                var registryPaths = new[]
-                {
-                    Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-                    Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-                    Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
-                };
-
-                foreach (var basePath in registryPaths)
-                {
-                    if (basePath == null) continue;
-
-                    foreach (var subKeyName in basePath.GetSubKeyNames())
-                    {
-                        using (var subKey = basePath.OpenSubKey(subKeyName))
-                        {
-                            var displayName = subKey?.GetValue("DisplayName") as string;
-                            var installLocation = subKey?.GetValue("InstallLocation") as string;
-                            var displayIcon = subKey?.GetValue("DisplayIcon") as string;
-
-                            if (string.IsNullOrEmpty(displayName) ||
-                                !displayName.ToLower().Contains(searchName))
-                                continue;
-
-                            if (!string.IsNullOrEmpty(installLocation) && Directory.Exists(installLocation))
-                            {
-                                var exeFiles = Directory.GetFiles(installLocation, "*.exe", SearchOption.TopDirectoryOnly);
-                                foreach (var exe in exeFiles)
-                                {
-                                    var exeName = Path.GetFileNameWithoutExtension(exe).ToLower();
-                                    if (exeName.Contains(searchName) || searchName.Contains(exeName))
-                                        return exe;
-                                }
-                            }
-
-                            if (!string.IsNullOrEmpty(displayIcon))
-                            {
-                                var iconPath = displayIcon.Split(',')[0].Trim();
-                                if (File.Exists(iconPath) && iconPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                                    return iconPath;
-                            }
-                        }
-                    }
-                    basePath?.Dispose();
-                }
-            }
-            catch { }
-
-            // 3. Program Files
-            var searchPaths = new[]
-            {
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs"),
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
-            };
-
-            foreach (var basePath in searchPaths)
-            {
-                if (!Directory.Exists(basePath)) continue;
-
-                try
-                {
-                    var matchingDirs = Directory.GetDirectories(basePath, $"*{searchName}*", SearchOption.TopDirectoryOnly);
-                    foreach (var dir in matchingDirs)
-                    {
-                        var exeFiles = Directory.GetFiles(dir, "*.exe", SearchOption.AllDirectories);
-                        foreach (var exe in exeFiles.Take(10))
-                        {
-                            var exeName = Path.GetFileNameWithoutExtension(exe).ToLower();
-                            if (exeName.Contains(searchName) || searchName.Contains(exeName))
-                                return exe;
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            return null;
-        }
 
         // ===== ОТКРЫТЬ URL =====
         public static string OpenUrl(string url)

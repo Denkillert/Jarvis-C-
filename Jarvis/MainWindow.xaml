@@ -64,6 +64,21 @@
                     Foreground="White"
                     BorderBrush="#007ACC"
                     Click="SendButton_Click"/>
+
+            <Border Background="#1E1E1E" Padding="10" Margin="0,0,0,10">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="StatusLabel" 
+                   Text="⏸ Ожидание..." 
+                   Foreground="Gray" 
+                   FontSize="14"
+                   FontWeight="SemiBold"/>
+                    <TextBlock Text="  |  " Foreground="#555" Margin="10,0"/>
+                    <TextBlock x:Name="ContextLabel" 
+                   Text="Контекст: Рабочий стол" 
+                   Foreground="#888" 
+                   FontSize="12"/>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>

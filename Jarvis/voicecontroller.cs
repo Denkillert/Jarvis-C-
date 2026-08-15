@@ -5,7 +5,6 @@ using System.IO;
 using System.Speech.Synthesis;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Timers;
 using Vosk;
 
 namespace Jarvis
@@ -25,6 +24,9 @@ namespace Jarvis
         public event Action<string> OnCommandRecognized;
         public event Action OnWakeWordDetected;
 
+        /// <summary>Сырой аудио буфер для VAD и других обработчиков</summary>
+        public event Action<byte[], int> OnAudioDataAvailable;
+
         public VoiceController()
         {
             _synthesizer = new SpeechSynthesizer();
@@ -40,7 +42,7 @@ namespace Jarvis
                 System.Diagnostics.Debug.WriteLine("[Voice] Русский голос не найден");
             }
 
-            _responseTimer = new System.Timers.Timer(5000); // 5 секунд на ответ после реплики
+            _responseTimer = new System.Timers.Timer(5000);
             _responseTimer.Elapsed += (s, e) =>
             {
                 System.Diagnostics.Debug.WriteLine("[Voice] ⏱ Таймер истёк - жду 'Джарвис'");
@@ -139,7 +141,10 @@ namespace Jarvis
         {
             if (_recognizer == null || e.BytesRecorded == 0) return;
 
-            // 🔥 ГЛАВНОЕ: Игнорируем звук, пока Джарвис говорит
+            // 🔥 Передаём аудио в VAD и другие обработчики
+            OnAudioDataAvailable?.Invoke(e.Buffer, e.BytesRecorded);
+
+            // Игнорируем звук, пока Джарвис говорит
             if (_isSpeaking) return;
 
             bool result = _recognizer.AcceptWaveform(e.Buffer, e.BytesRecorded);
@@ -219,7 +224,6 @@ namespace Jarvis
         {
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // 🔥 ВАЖНО: Блокируем микрофон, пока говорим
             _isSpeaking = true;
             text = text.Replace("*", "").Replace("#", "").Replace("[", "").Replace("]", "");
 
@@ -229,7 +233,7 @@ namespace Jarvis
             handler = (sender, e) =>
             {
                 _synthesizer.SpeakCompleted -= handler;
-                _isSpeaking = false; // Разблокируем микрофон
+                _isSpeaking = false;
                 tcs.SetResult(true);
             };
 
