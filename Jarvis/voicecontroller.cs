@@ -1,11 +1,11 @@
-﻿using System;
+﻿using NAudio.Wave;
+using System;
 using System.Globalization;
 using System.IO;
 using System.Speech.Synthesis;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Timers;
-using NAudio.Wave;
 using Vosk;
 
 namespace Jarvis
@@ -16,146 +16,161 @@ namespace Jarvis
         private VoskRecognizer _recognizer;
         private SpeechSynthesizer _synthesizer;
         private WaveInEvent _waveIn;
-        private System.Timers.Timer _postResponseTimer;
 
         private bool _isListening = false;
+        private bool _awaitingCommand = false;
+        private System.Timers.Timer _responseTimer;
         private bool _isSpeaking = false;
 
-        private bool _isWaitingForWakeWord = true;
-        private bool _isWaitingForCommand = false;
-
-        public event Action OnWakeWordDetected;
         public event Action<string> OnCommandRecognized;
+        public event Action OnWakeWordDetected;
 
         public VoiceController()
         {
             _synthesizer = new SpeechSynthesizer();
             _synthesizer.Rate = 0;
             _synthesizer.Volume = 100;
+
             try
             {
                 _synthesizer.SelectVoiceByHints(VoiceGender.Female, VoiceAge.Adult, 0, new CultureInfo("ru-RU"));
             }
-            catch { }
-
-            _postResponseTimer = new System.Timers.Timer(5000);
-            _postResponseTimer.Elapsed += (s, e) =>
+            catch
             {
-                System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] ⏱ Таймер истек. Возврат в режим 'Джарвис'.");
-                ResetToWakeWordMode();
+                System.Diagnostics.Debug.WriteLine("[Voice] Русский голос не найден");
+            }
+
+            _responseTimer = new System.Timers.Timer(5000); // 5 секунд на ответ после реплики
+            _responseTimer.Elapsed += (s, e) =>
+            {
+                System.Diagnostics.Debug.WriteLine("[Voice] ⏱ Таймер истёк - жду 'Джарвис'");
+                _awaitingCommand = false;
             };
-            _postResponseTimer.AutoReset = false;
+            _responseTimer.AutoReset = false;
 
             try
             {
                 string modelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", "ru", "vosk-model-small-ru-0.22");
+                System.Diagnostics.Debug.WriteLine($"[Vosk] Путь: {modelPath}");
 
                 if (Directory.Exists(modelPath))
                 {
                     _model = new Model(modelPath);
-
-                    // ⚠️ ВРЕМЕННО УБРАЛИ ГРАММАТИКУ для проверки базовой работы
                     _recognizer = new VoskRecognizer(_model, 16000.0f);
                     _recognizer.SetMaxAlternatives(0);
-                    _recognizer.SetWords(true); // Включаем слова для лучшего дебага
-                    System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] ✅ Модель загружена БЕЗ грамматики (базовый режим).");
+                    _recognizer.SetWords(false);
+                    System.Diagnostics.Debug.WriteLine("[Vosk] ✅ Модель загружена");
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] ❌ Модель не найдена: {modelPath}");
+                    System.Diagnostics.Debug.WriteLine($"[Vosk] ❌ НЕ НАЙДЕНА: {modelPath}");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] ❌ Ошибка Vosk: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[Vosk] Ошибка: {ex.Message}");
             }
         }
 
-        public void StartListening()
+        public void StartListening(bool wakeWordMode = true)
         {
-            if (_recognizer != null && !_isListening)
+            if (_recognizer == null) return;
+
+            if (!_isListening)
             {
                 try
                 {
                     _waveIn = new WaveInEvent();
                     _waveIn.WaveFormat = new WaveFormat(16000, 16, 1);
                     _waveIn.DataAvailable += OnDataAvailable;
-
-                    if (WaveInEvent.DeviceCount > 0)
-                    {
-                        var caps = WaveInEvent.GetCapabilities(0);
-                        System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] 🎤 УСТРОЙСТВО: {caps.ProductName}");
-                    }
-
                     _waveIn.StartRecording();
                     _isListening = true;
-                    System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] 🎤 Запись начата.");
+
+                    if (wakeWordMode)
+                    {
+                        _awaitingCommand = false;
+                        System.Diagnostics.Debug.WriteLine("[Voice] 🔴 Слушаю слово 'Джарвис'...");
+                    }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] ❌ Ошибка запуска: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"[Voice] Ошибка запуска: {ex.Message}");
                 }
             }
+        }
+
+        public void StartListeningForCommands()
+        {
+            _awaitingCommand = true;
+            _responseTimer.Start();
+
+            if (!_isListening)
+            {
+                try
+                {
+                    _waveIn = new WaveInEvent();
+                    _waveIn.WaveFormat = new WaveFormat(16000, 16, 1);
+                    _waveIn.DataAvailable += OnDataAvailable;
+                    _waveIn.StartRecording();
+                    _isListening = true;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Voice] Ошибка: {ex.Message}");
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine("[Voice] 🎤 Слушаю команду (5 сек)...");
         }
 
         public void StopListening()
         {
-            if (_isListening && _waveIn != null)
+            if (_isListening)
             {
-                _waveIn.StopRecording();
-                _waveIn.Dispose();
-                _waveIn = null;
+                _waveIn?.StopRecording();
                 _isListening = false;
-                _postResponseTimer.Stop();
-                System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] ⏹ Запись остановлена.");
+                _awaitingCommand = false;
+                _responseTimer?.Stop();
+                System.Diagnostics.Debug.WriteLine("[Voice] ⏹ Остановил");
             }
-        }
-
-        public void StartListeningForCommandsAfterResponse()
-        {
-            _isWaitingForCommand = true;
-            _isWaitingForWakeWord = false;
-            _postResponseTimer.Start();
-
-            if (!_isListening) StartListening();
-            System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] 🟢 Режим: ЖДУ КОМАНДУ (5 сек).");
-        }
-
-        private void ResetToWakeWordMode()
-        {
-            _postResponseTimer.Stop();
-            _isWaitingForWakeWord = true;
-            _isWaitingForCommand = false;
-            System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] 🔴 Режим: ЖДУ СЛОВО 'ДЖАРВИС'.");
         }
 
         private void OnDataAvailable(object sender, WaveInEventArgs e)
         {
             if (_recognizer == null || e.BytesRecorded == 0) return;
+
+            // 🔥 ГЛАВНОЕ: Игнорируем звук, пока Джарвис говорит
             if (_isSpeaking) return;
 
+            bool result = _recognizer.AcceptWaveform(e.Buffer, e.BytesRecorded);
+
+            if (result)
+            {
+                string jsonResult = _recognizer.Result();
+                ProcessRecognition(jsonResult);
+            }
+            else
+            {
+                string partial = _recognizer.PartialResult();
+                ProcessPartialRecognition(partial);
+            }
+        }
+
+        private void ProcessPartialRecognition(string partialJson)
+        {
             try
             {
-                // 🔥 ГЛАВНЫЙ ДЕБАГ: что возвращает Vosk при обработке звука
-                bool isFinal = _recognizer.AcceptWaveform(e.Buffer, e.BytesRecorded);
-
-                if (isFinal)
+                using var doc = JsonDocument.Parse(partialJson);
+                if (doc.RootElement.TryGetProperty("partial", out var partialElement))
                 {
-                    string jsonResult = _recognizer.Result();
-                    System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] 📦 ФИНАЛЬНЫЙ JSON: {jsonResult}");
-                    ProcessRecognition(jsonResult);
-                }
-                else
-                {
-                    // Показываем "сырой" частичный результат, чтобы понять, видит ли Vosk хоть что-то
-                    string partialRaw = _recognizer.PartialResult();
-                    System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] 👂 ЧАСТИЧНО (raw): {partialRaw}");
+                    string partialText = partialElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(partialText))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[Voice] Частично: {partialText}");
+                    }
                 }
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] ❌ Ошибка обработки: {ex.Message}");
-            }
+            catch { }
         }
 
         private void ProcessRecognition(string jsonResult)
@@ -168,37 +183,35 @@ namespace Jarvis
                     string text = textElement.GetString();
                     if (string.IsNullOrWhiteSpace(text)) return;
 
-                    string currentMode = _isWaitingForWakeWord ? "ОЖИДАНИЕ СЛОВА" : "ОЖИДАНИЕ КОМАНДЫ";
-                    System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] 🎯 РАСПОЗНАНО: '{text}' | Режим: {currentMode}");
+                    System.Diagnostics.Debug.WriteLine($"[Voice] Распознано: '{text}' (режим: {(_awaitingCommand ? "КОМАНДА" : "WAKE WORD")})");
 
-                    if (_isWaitingForWakeWord)
+                    if (_awaitingCommand)
                     {
-                        if (text.ToLower().Contains("джарвис") || text.ToLower().Contains("jarvis"))
+                        if (text.ToLower().Contains("стоп") || text.ToLower().Contains("хватит") || text.ToLower().Contains("отмена"))
                         {
-                            System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] ✅ Услышал 'Джарвис'!");
-                            _isWaitingForWakeWord = false;
-                            _isWaitingForCommand = true;
-                            OnWakeWordDetected?.Invoke();
-                        }
-                    }
-                    else if (_isWaitingForCommand)
-                    {
-                        if (text.ToLower().Contains("стоп") || text.ToLower().Contains("отмена") || text.ToLower().Contains("хватит"))
-                        {
-                            System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] 🛑 Отмена.");
-                            ResetToWakeWordMode();
+                            System.Diagnostics.Debug.WriteLine("[Voice] Услышал 'стоп' - сброс");
+                            _awaitingCommand = false;
+                            _responseTimer.Stop();
                         }
                         else
                         {
-                            System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] 🚀 Команда: '{text}'");
                             OnCommandRecognized?.Invoke(text);
+                        }
+                    }
+                    else
+                    {
+                        if (text.ToLower().Contains("джарвис") || text.ToLower().Contains("jarvis"))
+                        {
+                            System.Diagnostics.Debug.WriteLine("[Voice] ✅ Услышал 'Джарвис'!");
+                            OnWakeWordDetected?.Invoke();
+                            _awaitingCommand = true;
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Vosk DEBUG] ❌ Ошибка парсинга: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[Voice] Ошибка парсинга: {ex.Message}");
             }
         }
 
@@ -206,6 +219,7 @@ namespace Jarvis
         {
             if (string.IsNullOrWhiteSpace(text)) return;
 
+            // 🔥 ВАЖНО: Блокируем микрофон, пока говорим
             _isSpeaking = true;
             text = text.Replace("*", "").Replace("#", "").Replace("[", "").Replace("]", "");
 
@@ -215,7 +229,7 @@ namespace Jarvis
             handler = (sender, e) =>
             {
                 _synthesizer.SpeakCompleted -= handler;
-                _isSpeaking = false;
+                _isSpeaking = false; // Разблокируем микрофон
                 tcs.SetResult(true);
             };
 
@@ -223,13 +237,14 @@ namespace Jarvis
             _synthesizer.SpeakAsync(text);
 
             await tcs.Task;
-            System.Diagnostics.Debug.WriteLine("[Vosk DEBUG] 🗣 Джарвис закончил говорить.");
+            System.Diagnostics.Debug.WriteLine("[Voice] Джарвис закончил говорить.");
         }
 
         public void Dispose()
         {
             StopListening();
-            _postResponseTimer?.Dispose();
+            _responseTimer?.Dispose();
+            _waveIn?.Dispose();
             _recognizer?.Dispose();
             _model?.Dispose();
             _synthesizer?.Dispose();

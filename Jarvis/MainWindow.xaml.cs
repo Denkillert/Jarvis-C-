@@ -22,18 +22,15 @@ namespace Jarvis
             _ollama = new OllamaService("qwen2.5:3b");
             _voice = new VoiceController();
 
-            // 1. Когда услышали "Джарвис"
             _voice.OnWakeWordDetected += () =>
             {
                 Dispatcher.Invoke(async () =>
                 {
                     AddMessage("Джарвис", "Слушаю...", Brushes.Yellow);
-                    // Говорим "Да?" и ЖДЕМ окончания, чтобы не начать слушать команду поверх своего голоса
                     await _voice.SpeakAndWaitAsync("Да?");
                 });
             };
 
-            // 2. Когда услышали команду
             _voice.OnCommandRecognized += async (text) =>
             {
                 await Dispatcher.InvokeAsync(async () =>
@@ -45,7 +42,6 @@ namespace Jarvis
 
             AddMessage("Джарвис", "Система готова. Скажите 'Джарвис' для активации.", Brushes.LightGreen);
 
-            // Включаем микрофон при старте (он сразу в режиме "Жду слово Джарвис")
             _voice.StartListening();
             _isMicOn = true;
             MicButton.Background = Brushes.Red;
@@ -85,7 +81,6 @@ namespace Jarvis
             SendButton.IsEnabled = false;
             InputBox.IsEnabled = false;
 
-            // Выключаем микрофон, пока думаем и говорим
             _voice.StopListening();
 
             AddMessage("Вы", text, Brushes.LightBlue);
@@ -100,23 +95,46 @@ namespace Jarvis
                 AgentResponse response = await _ollama.AskAsync(text);
                 ChatParagraph.Inlines.Remove(thinkingRun);
 
-                // Выполняем действие (если есть)
+                // 🔥 ВЫПОЛНЯЕМ ДЕЙСТВИЕ И ПОЛУЧАЕМ РЕЗУЛЬТАТ
+                string toolResult = null;
                 if (!string.IsNullOrWhiteSpace(response.action))
                 {
-                    await ExecuteTool(response.action, response.parameters);
+                    toolResult = await ExecuteTool(response.action, response.parameters);
                 }
 
-                // Говорим ответ и ЖДЕМ его окончания
-                if (!string.IsNullOrWhiteSpace(response.text))
+                // 🔥 ОПРЕДЕЛЯЕМ ЧТО ГОВОРИТЬ:
+                string responseText;
+
+                // Если инструмент вернул результат (время, дата, команды) — используем его
+                if (!string.IsNullOrWhiteSpace(toolResult) &&
+                    (response.action.ToLower() == "get_time" ||
+                     response.action.ToLower() == "get_date" ||
+                     response.action.ToLower() == "run_cmd"))
                 {
-                    AddMessage("Джарвис", response.text, Brushes.LightGreen);
-                    await _voice.SpeakAndWaitAsync(response.text);
+                    responseText = toolResult;
+                }
+                // Иначе используем текст от нейросети
+                else if (!string.IsNullOrWhiteSpace(response.text))
+                {
+                    responseText = response.text;
+                }
+                // Или результат инструмента
+                else
+                {
+                    responseText = toolResult;
                 }
 
-                // КЛЮЧЕВОЙ МОМЕНТ: После того как он замолчал, даем 5 секунд на команду
+                // Говорим ответ
+                if (!string.IsNullOrWhiteSpace(responseText))
+                {
+                    AddMessage("Джарвис", responseText, Brushes.LightGreen);
+                    await _voice.SpeakAndWaitAsync(responseText);
+                }
+
+                // Возвращаемся к прослушиванию
                 if (_isMicOn)
                 {
-                    _voice.StartListeningForCommandsAfterResponse();
+                    _voice.StartListeningForCommands();
                 }
             }
             catch (Exception ex)
@@ -133,28 +151,46 @@ namespace Jarvis
             InputBox.Focus();
         }
 
-        private async Task ExecuteTool(string action, JsonElement parameters)
+        private async Task<string> ExecuteTool(string action, JsonElement parameters)
         {
             try
             {
                 string appName = parameters.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
+                string url = parameters.TryGetProperty("url", out var urlProp) ? urlProp.GetString() ?? "" : "";
+                string command = parameters.TryGetProperty("command", out var cmdProp) ? cmdProp.GetString() ?? "" : "";
 
                 string result = action.ToLower() switch
                 {
                     "open_app" => SystemController.OpenApp(appName),
-                    "close_app" => SystemController.CloseApp(appName, forceKill: false),
-                    "open_url" => SystemController.OpenUrl(parameters.GetProperty("url").GetString() ?? ""),
-                    _ => $"Неизвестный инструмент: {action}"
+                    "close_app" => SystemController.CloseApp(appName),
+                    "focus_app" => SystemController.FocusApp(appName),
+                    "open_url" => SystemController.OpenUrl(url),
+                    "run_cmd" => SystemController.RunCmd(command),
+                    "shutdown" => SystemController.Shutdown(),
+                    "restart" => SystemController.Restart(),
+                    "lock_screen" => SystemController.LockScreen(),
+                    "volume_up" => SystemController.VolumeUp(),
+                    "volume_down" => SystemController.VolumeDown(),
+                    "volume_mute" => SystemController.VolumeMute(),
+                    "get_time" => DateTime.Now.ToString("HH:mm"),
+                    "get_date" => DateTime.Now.ToString("dd MMMM yyyy"),
+                    _ => null
                 };
 
-                if (!string.IsNullOrWhiteSpace(result))
+                // Показываем системное сообщение только для действий с приложениями
+                if (!string.IsNullOrWhiteSpace(result) &&
+                    action.ToLower() != "get_time" &&
+                    action.ToLower() != "get_date")
                 {
                     AddMessage("Джарвис", $"[Система]: {result}", Brushes.Gray);
                 }
+
+                return result;
             }
             catch (Exception ex)
             {
                 AddMessage("Джарвис", $"[Ошибка]: {ex.Message}", Brushes.Red);
+                return null;
             }
             await Task.CompletedTask;
         }

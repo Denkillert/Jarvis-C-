@@ -18,44 +18,54 @@ namespace Jarvis
         {
             _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             _model = model;
-            _endpoint = "http://127.0.0.1:11434/api/chat"; // 127.0.0.1 надежнее чем localhost (как в их фиксах)
+            _endpoint = "http://127.0.0.1:11434/api/chat";
             _history.Add(new ChatMessage { role = "system", content = GetSystemPrompt() });
         }
 
         private string GetSystemPrompt()
         {
-            // Адаптация их промпта: четкие инструкции для инструментов, никакой воды
-            return @"Ты — локальный AI-агент. Твоя задача: анализировать запрос и возвращать ТОЛЬКО валидный JSON.
-Никакого markdown, никаких пояснений вне JSON.
+            return @"Ты — Джарвис, голосовой ассистент. Отвечай кратко на русском языке.
 
-Структура ответа:
-{
-  ""text"": ""Краткий, естественный ответ пользователю на русском языке. Без слов-паразитов."",
-  ""action"": ""имя_инструмента_или_пустая_строка"",
-  ""parameters"": {}
-}
+ЕСЛИ пользователь просит выполнить действие (открыть приложение, закрыть, запустить, узнать время/дату, открыть сайт) — отвечай СТРОГО в формате JSON:
+{""action"": ""имя_команды"", ""parameters"": {""name"": ""имя.exe""}, ""text"": ""краткий ответ""}
 
-ДОСТУПНЫЕ ИНСТРУМЕНТЫ (action):
-1. ""open_app"": Запустить приложение. parameters: {""name"": ""точное_имя.exe""}
-   - Калькулятор → ""CalculatorApp.exe""
-   - Блокнот → ""notepad.exe""
-   - Проводник → ""explorer.exe""
-   - Discord → ""Discord.exe""
-2. ""close_app"": Закрыть приложение. parameters: {""name"": ""точное_имя.exe""}
-3. ""open_url"": Открыть сайт. parameters: {""url"": ""https://...""}
+ДОСТУПНЫЕ КОМАНДЫ:
+- open_app: {""name"": ""CalculatorApp.exe""} (калькулятор), {""name"": ""Discord.exe""}, {""name"": ""Telegram.exe""}, {""name"": ""notepad.exe""}
+- close_app: {""name"": ""имя.exe""}
+- focus_app: {""name"": ""имя.exe""} (развернуть)
+- open_url: {""url"": ""https://...""}
+- get_time: {} (верни время в поле text)
+- get_date: {} (верни дату в поле text)
+- run_cmd: {""command"": ""команда""}
+
+ИНАЧЕ — отвечай обычным текстом, без JSON.
 
 ПРИМЕРЫ:
-Запрос: ""Открой калькулятор""
-Ответ: {""text"": ""Запускаю калькулятор."", ""action"": ""open_app"", ""parameters"": {""name"": ""CalculatorApp.exe""}}
+Пользователь: ""Привет""
+Ты: Привет! Чем могу помочь?
 
-Запрос: ""Привет, как дела?""
-Ответ: {""text"": ""Системы в норме. Готов к работе."", ""action"": """", ""parameters"": {}}";
+Пользователь: ""Открой калькулятор""
+Ты: {""action"": ""open_app"", ""parameters"": {""name"": ""CalculatorApp.exe""}, ""text"": ""Открываю калькулятор""}
+
+Пользователь: ""Какое время?""
+Ты: {""action"": ""get_time"", ""parameters"": {}, ""text"": ""Сейчас 14:30""}
+
+Пользователь: ""Расскажи шутку""
+Ты: Почему программисты путают Хэллоуин и Рождество? Потому что 31 OCT = 25 DEC";
         }
 
         public async Task<AgentResponse> AskAsync(string question)
         {
             try
             {
+                // Ограничение истории
+                if (_history.Count > 12)
+                {
+                    var systemMessage = _history[0];
+                    _history.Clear();
+                    _history.Add(systemMessage);
+                }
+
                 _history.Add(new ChatMessage { role = "user", content = question });
 
                 var requestBody = new
@@ -63,12 +73,11 @@ namespace Jarvis
                     model = _model,
                     messages = _history,
                     stream = false,
-                    format = "json" // Принудительный JSON режим Ollama
+                    options = new { temperature = 0.3 }
                 };
 
                 var json = JsonSerializer.Serialize(requestBody);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-
                 var response = await _httpClient.PostAsync(_endpoint, content);
                 response.EnsureSuccessStatusCode();
 
@@ -77,26 +86,42 @@ namespace Jarvis
 
                 if (ollamaResponse?.message?.content != null)
                 {
-                    string jsonContent = ollamaResponse.message.content.Trim();
+                    string reply = ollamaResponse.message.content.Trim();
 
-                    // Очистка от markdown-оберток (частая проблема маленьких моделей)
-                    if (jsonContent.StartsWith("```json")) jsonContent = jsonContent[7..];
-                    if (jsonContent.StartsWith("```")) jsonContent = jsonContent[3..];
-                    if (jsonContent.EndsWith("```")) jsonContent = jsonContent[..^3];
+                    // Очищаем от markdown
+                    if (reply.StartsWith("```json")) reply = reply[7..];
+                    if (reply.StartsWith("```")) reply = reply[3..];
+                    if (reply.EndsWith("```")) reply = reply[..^3];
+                    reply = reply.Trim();
 
-                    var result = JsonSerializer.Deserialize<AgentResponse>(jsonContent.Trim());
-                    if (result != null)
+                    // 🔥 ПРОВЕРЯЕМ: это JSON или обычный текст?
+                    if (reply.StartsWith("{") && reply.EndsWith("}"))
                     {
-                        if (!string.IsNullOrEmpty(result.text))
-                            _history.Add(new ChatMessage { role = "assistant", content = result.text });
-                        return result;
+                        try
+                        {
+                            var result = JsonSerializer.Deserialize<AgentResponse>(reply);
+                            if (result != null)
+                            {
+                                _history.Add(new ChatMessage { role = "assistant", content = reply });
+                                return result;
+                            }
+                        }
+                        catch
+                        {
+                            // Не JSON — возвращаем как текст
+                        }
                     }
+
+                    // Обычный текст — нет команды
+                    _history.Add(new ChatMessage { role = "assistant", content = reply });
+                    return new AgentResponse { text = reply, action = "" };
                 }
-                return new AgentResponse { text = "Не удалось получить ответ от агента." };
+
+                return new AgentResponse { text = "Не удалось получить ответ." };
             }
             catch (Exception ex)
             {
-                return new AgentResponse { text = $"Ошибка сети или агента: {ex.Message}" };
+                return new AgentResponse { text = $"Ошибка: {ex.Message}" };
             }
         }
 
