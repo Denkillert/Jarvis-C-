@@ -2,7 +2,6 @@
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -12,9 +11,7 @@ namespace Jarvis
     public partial class MainWindow : Window
     {
         private readonly OllamaService _ollama;
-        private readonly CommandManager _commandManager;
         private readonly VoiceController _voice;
-
         private bool _isProcessing = false;
         private bool _isMicOn = false;
 
@@ -23,79 +20,63 @@ namespace Jarvis
             InitializeComponent();
 
             _ollama = new OllamaService("qwen2.5:3b");
-            _commandManager = new CommandManager();
             _voice = new VoiceController();
 
-            // Подписка на WAKE WORD "Джарвис"
+            // 1. Когда услышали "Джарвис"
             _voice.OnWakeWordDetected += () =>
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    AddMessage("", "🎤 Джарвис слушает...", Brushes.Yellow);
-                    _voice.Speak("Да?");
-                });
-            };
-
-            // Подписка на КОМАНДЫ
-            _voice.OnCommandRecognized += (commandText) =>
             {
                 Dispatcher.Invoke(async () =>
                 {
-                    InputBox.Text = commandText;
-                    await SendMessage();
+                    AddMessage("Джарвис", "Слушаю...", Brushes.Yellow);
+                    // Говорим "Да?" и ЖДЕМ окончания, чтобы не начать слушать команду поверх своего голоса
+                    await _voice.SpeakAndWaitAsync("Да?");
+                });
+            };
+
+            // 2. Когда услышали команду
+            _voice.OnCommandRecognized += async (text) =>
+            {
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    InputBox.Text = text;
+                    await ProcessMessage();
                 });
             };
 
             AddMessage("Джарвис", "Система готова. Скажите 'Джарвис' для активации.", Brushes.LightGreen);
 
-            SendButton.Click += SendButton_Click;
-            InputBox.KeyDown += InputBox_KeyDown;
-            MicButton.Click += MicButton_Click;
-
-            // Автозапуск микрофона
+            // Включаем микрофон при старте (он сразу в режиме "Жду слово Джарвис")
             _voice.StartListening();
             _isMicOn = true;
             MicButton.Background = Brushes.Red;
-            MicButton.Content = "🛑";
-
-            InputBox.Focus();
         }
 
         private void MicButton_Click(object sender, RoutedEventArgs e)
         {
-            if (!_isMicOn)
+            _isMicOn = !_isMicOn;
+            if (_isMicOn)
             {
                 _voice.StartListening();
                 MicButton.Background = Brushes.Red;
-                MicButton.Content = "🛑";
-                _isMicOn = true;
             }
             else
             {
                 _voice.StopListening();
-                MicButton.Background = Brushes.Transparent;
-                MicButton.Content = "";
-                _isMicOn = false;
+                MicButton.Background = (Brush)new BrushConverter().ConvertFrom("#3E3E42");
             }
         }
 
         private void InputBox_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Enter && !_isProcessing)
-            {
-                SendMessage();
-            }
+            if (e.Key == Key.Enter && !_isProcessing) ProcessMessage();
         }
 
-        private void SendButton_Click(object sender, RoutedEventArgs e)
+        private async void SendButton_Click(object sender, RoutedEventArgs e)
         {
-            if (!_isProcessing)
-            {
-                SendMessage();
-            }
+            if (!_isProcessing) await ProcessMessage();
         }
 
-        private async Task SendMessage()
+        private async Task ProcessMessage()
         {
             string text = InputBox.Text.Trim();
             if (string.IsNullOrEmpty(text)) return;
@@ -104,45 +85,46 @@ namespace Jarvis
             SendButton.IsEnabled = false;
             InputBox.IsEnabled = false;
 
-            // 🔴 ВЫКЛЮЧАЕМ МИКРОФОН пока думаем и говорим
+            // Выключаем микрофон, пока думаем и говорим
             _voice.StopListening();
 
             AddMessage("Вы", text, Brushes.LightBlue);
             InputBox.Text = "";
 
             var thinkingRun = new Run("Джарвис думает...\n");
-            ChatHistory.Inlines.Add(thinkingRun);
-            ScrollToBottom();
+            ChatParagraph.Inlines.Add(thinkingRun);
+            ChatHistory.ScrollToEnd();
 
             try
             {
                 AgentResponse response = await _ollama.AskAsync(text);
+                ChatParagraph.Inlines.Remove(thinkingRun);
 
-                ChatHistory.Inlines.Remove(thinkingRun);
+                // Выполняем действие (если есть)
+                if (!string.IsNullOrWhiteSpace(response.action))
+                {
+                    await ExecuteTool(response.action, response.parameters);
+                }
 
+                // Говорим ответ и ЖДЕМ его окончания
                 if (!string.IsNullOrWhiteSpace(response.text))
                 {
                     AddMessage("Джарвис", response.text, Brushes.LightGreen);
-
-                    // Ждём пока РЕАЛЬНО закончит говорить (будь то 2 секунды или 2 минуты)
                     await _voice.SpeakAndWaitAsync(response.text);
-
-                    // 🎤 СРАЗУ после окончания речи включаем микрофон в режиме команд
-                    if (_isMicOn)
-                    {
-                        _voice.StartListeningForCommands();
-                    }
                 }
 
-                if (!string.IsNullOrWhiteSpace(response.action))
+                // КЛЮЧЕВОЙ МОМЕНТ: После того как он замолчал, даем 5 секунд на команду
+                if (_isMicOn)
                 {
-                    await ExecuteCommand(response.action, response.parameters);
+                    _voice.StartListeningForCommandsAfterResponse();
                 }
             }
             catch (Exception ex)
             {
-                ChatHistory.Inlines.Remove(thinkingRun);
+                ChatParagraph.Inlines.Remove(thinkingRun);
                 AddMessage("Джарвис", $"Ошибка: {ex.Message}", Brushes.Red);
+
+                if (_isMicOn) _voice.StartListening();
             }
 
             _isProcessing = false;
@@ -151,27 +133,18 @@ namespace Jarvis
             InputBox.Focus();
         }
 
-        private async Task ExecuteCommand(string action, JsonElement parameters)
+        private async Task ExecuteTool(string action, JsonElement parameters)
         {
             try
             {
-                // Берём имя напрямую из JSON (например, "calc.exe")
                 string appName = parameters.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "";
 
                 string result = action.ToLower() switch
                 {
                     "open_app" => SystemController.OpenApp(appName),
                     "close_app" => SystemController.CloseApp(appName, forceKill: false),
-                    "force_close_app" => SystemController.CloseApp(appName, forceKill: true),
                     "open_url" => SystemController.OpenUrl(parameters.GetProperty("url").GetString() ?? ""),
-                    "open_explorer" => SystemController.OpenExplorer(parameters.TryGetProperty("path", out var p) ? p.GetString() ?? "" : ""),
-                    "run_cmd" => SystemController.RunCmd(parameters.GetProperty("command").GetString() ?? ""),
-                    "lock_screen" => SystemController.LockScreen(),
-                    "shutdown" => SystemController.Shutdown(),
-                    "cancel_shutdown" => SystemController.CancelShutdown(),
-                    "restart" => SystemController.Restart(),
-                    "get_system_info" => SystemController.GetSystemInfo(),
-                    _ => $"Неизвестная команда: {action}"
+                    _ => $"Неизвестный инструмент: {action}"
                 };
 
                 if (!string.IsNullOrWhiteSpace(result))
@@ -181,9 +154,8 @@ namespace Jarvis
             }
             catch (Exception ex)
             {
-                AddMessage("Джарвис", $"[Ошибка выполнения]: {ex.Message}", Brushes.Red);
+                AddMessage("Джарвис", $"[Ошибка]: {ex.Message}", Brushes.Red);
             }
-
             await Task.CompletedTask;
         }
 
@@ -191,31 +163,9 @@ namespace Jarvis
         {
             var senderRun = new Run($"{sender}: ") { Foreground = color, FontWeight = FontWeights.Bold };
             var textRun = new Run($"{text}\n\n");
-
-            ChatHistory.Inlines.Add(senderRun);
-            ChatHistory.Inlines.Add(textRun);
-            ScrollToBottom();
-        }
-
-        private void ScrollToBottom()
-        {
-            var scrollViewer = FindVisualChild<ScrollViewer>(ChatHistory);
-            scrollViewer?.ScrollToEnd();
-        }
-
-        private T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
-        {
-            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-            {
-                var child = VisualTreeHelper.GetChild(parent, i);
-                if (child is T result)
-                    return result;
-
-                var found = FindVisualChild<T>(child);
-                if (found != null)
-                    return found;
-            }
-            return null;
+            ChatParagraph.Inlines.Add(senderRun);
+            ChatParagraph.Inlines.Add(textRun);
+            ChatHistory.ScrollToEnd();
         }
     }
 }
