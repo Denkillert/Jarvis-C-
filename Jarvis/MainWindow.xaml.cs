@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Documents;
@@ -19,6 +21,7 @@ namespace Jarvis
 
         private bool _isProcessing = false;
         private bool _isMicOn = false;
+        private bool _setupDone = false;
 
         public MainWindow()
         {
@@ -65,7 +68,9 @@ namespace Jarvis
             {
                 await Dispatcher.InvokeAsync(async () =>
                 {
+                    // 🔥 1. Исправляем ошибки распознавания ("ским" → "стим")
                     var corrected = RecognitionCorrector.Correct(rawText);
+                    // 2. Улучшаем текст (слова-паразиты, пунктуация)
                     var enhancedText = await _textEnhancer.EnhanceAsync(corrected);
                     InputBox.Text = enhancedText;
                     await ProcessMessage();
@@ -79,12 +84,21 @@ namespace Jarvis
             };
 
             AddMessage("Джарвис", "Система готова. Скажите 'Джарвис' для активации.", Brushes.LightGreen);
+
+            if (!_voice.IsModelLoaded)
+            {
+                AddMessage("Джарвис", "⚠ Модель речи не найдена — скачиваю, секунду...", Brushes.Orange);
+            }
+
             StatusLabel.Text = "⏸ Ожидание...";
             StatusLabel.Foreground = Brushes.Gray;
 
             _voice.StartListening();
             _isMicOn = true;
             MicButton.Background = Brushes.Red;
+
+            // === Мастер первого запуска (модели + Ollama) ===
+            Loaded += async (s, e) => await RunSetupAsync();
         }
 
         private void MicButton_Click(object sender, RoutedEventArgs e)
@@ -135,7 +149,7 @@ namespace Jarvis
             {
                 string responseText = null;
 
-                // === ШАГ 1: Пробуем быстрый парсер (без LLM) ===
+                // === ШАГ 1: быстрый парсер (без LLM) ===
                 var parsed = _commandParser.Parse(text);
                 if (parsed != null && parsed.Confidence >= 0.85)
                 {
@@ -144,7 +158,6 @@ namespace Jarvis
                     var jsonParams = JsonSerializer.SerializeToElement(parsed.Parameters);
                     var toolResult = await ExecuteTool(parsed.Action, jsonParams);
 
-                    // Для get_time/get_date используем результат инструмента
                     if (parsed.Action == "get_time" || parsed.Action == "get_date")
                     {
                         responseText = toolResult ?? "Не удалось получить информацию.";
@@ -160,20 +173,33 @@ namespace Jarvis
                 }
                 else
                 {
-                    // === ШАГ 2: Отправляем в LLM с контекстом ===
+                    // === ШАГ 2: LLM с контекстом ===
                     var context = _contextDetector.GetCurrentContext();
 
                     AgentResponse response = await _ollama.AskAsync(text);
                     ChatParagraph.Inlines.Remove(thinkingRun);
 
-                    // Выполняем действие если LLM его определил
+                    // 🔥 ЗАЩИТА 1: нейросеть ответила голым именем команды ("get_time") → считаем это действием
+                    if (string.IsNullOrWhiteSpace(response.action) && IsKnownAction(response.text))
+                    {
+                        response.action = response.text.Trim().ToLower();
+                        response.text = "";
+                    }
+
+                    // 🔥 ЗАЩИТА 2: нет параметров → подставляем пустой объект, чтобы ExecuteTool не крашился
+                    if (response.parameters.ValueKind != JsonValueKind.Object)
+                    {
+                        response.parameters = JsonSerializer.SerializeToElement(new Dictionary<string, string>());
+                    }
+
+                    // Выполняем действие, если LLM его определил
                     string toolResult = null;
                     if (!string.IsNullOrWhiteSpace(response.action))
                     {
                         toolResult = await ExecuteTool(response.action, response.parameters);
                     }
 
-                    // Определяем что говорить
+                    // Определяем, что говорить
                     if (!string.IsNullOrWhiteSpace(toolResult) &&
                         (response.action.ToLower() == "get_time" ||
                          response.action.ToLower() == "get_date" ||
@@ -189,6 +215,17 @@ namespace Jarvis
                     {
                         responseText = toolResult;
                     }
+                }
+
+                // 🔥 ЗАЩИТА 3: время и дату берём ТОЛЬКО из системы — нейросеть их не знает
+                var lowerInput = text.ToLower();
+                if (Regex.IsMatch(lowerInput, @"(?:сколько|который)\s+время"))
+                {
+                    responseText = SystemController.GetTime();
+                }
+                else if (Regex.IsMatch(lowerInput, @"(?:какая|какой)\s+(?:сегодня\s+)?дата"))
+                {
+                    responseText = SystemController.GetDate();
                 }
 
                 // Говорим ответ
@@ -253,6 +290,7 @@ namespace Jarvis
                     _ => null
                 };
 
+                // Системное сообщение — только для действий с приложениями
                 if (!string.IsNullOrWhiteSpace(result) &&
                     action.ToLower() != "get_time" &&
                     action.ToLower() != "get_date")
@@ -267,6 +305,95 @@ namespace Jarvis
                 AddMessage("Джарвис", $"[Ошибка]: {ex.Message}", Brushes.Red);
                 return null;
             }
+        }
+
+        // ===== Мастер первого запуска =====
+
+        private async Task RunSetupAsync()
+        {
+            if (_setupDone) return;
+            _setupDone = true;
+
+            try
+            {
+                // 1. Речь — качаем в папку проекта
+                if (!SetupService.IsVoskReady())
+                {
+                    await SetupService.EnsureVoskAsync(
+                        msg => Dispatcher.Invoke(() => StatusLabel.Text = "⚙ " + msg),
+                        pct => Dispatcher.Invoke(() => StatusLabel.Text = $"⚙ Модель речи: {pct}%"));
+
+                    if (_voice.TryLoadModel(SetupService.VoskModelPath) && _isMicOn)
+                        _voice.StartListening();
+                }
+
+                // 2. Мозг — в фоне, Ollama стартует сама
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await SetupService.EnsureOllamaAsync(
+                            msg => Dispatcher.Invoke(() => StatusLabel.Text = "⚙ " + msg));
+                    }
+                    finally
+                    {
+                        Dispatcher.Invoke(() => StatusLabel.Text = "⏸ Ожидание...");
+                    }
+                });
+
+                AddMessage("Джарвис", "Все компоненты готовы. Скажите 'Джарвис'.", Brushes.LightGreen);
+            }
+            catch (Exception ex)
+            {
+                AddMessage("Джарвис", $"Ошибка установки: {ex.Message}", Brushes.Orange);
+            }
+        }
+
+        // ===== Предупреждение при закрытии: Ollama остаётся в памяти =====
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            if (SetupService.OllamaStartedByUs)
+            {
+                var res = MessageBox.Show(
+                    "Джарвис закрывается.\n\n" +
+                    "Нейросеть Ollama всё ещё работает в фоне и занимает оперативную память (~2 ГБ).\n\n" +
+                    "ДА  — выйти из Ollama вместе с Джарвисом\n" +
+                    "НЕТ — оставить Ollama работать\n" +
+                    "ОТМЕНА — не закрывать Джарвис",
+                    "Закрытие",
+                    MessageBoxButton.YesNoCancel,
+                    MessageBoxImage.Question);
+
+                if (res == MessageBoxResult.Cancel)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+
+                if (res == MessageBoxResult.Yes)
+                {
+                    SetupService.StopOllama();
+                }
+            }
+
+            base.OnClosing(e);
+        }
+
+        // ===== Вспомогательные =====
+
+        private static readonly HashSet<string> _knownActions = new()
+        {
+            "open_app", "close_app", "focus_app", "open_url", "run_cmd",
+            "shutdown", "restart", "lock_screen",
+            "volume_up", "volume_down", "volume_mute",
+            "get_time", "get_date"
+        };
+
+        private bool IsKnownAction(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            return _knownActions.Contains(text.Trim().ToLower());
         }
 
         private void AddMessage(string sender, string text, Brush color)

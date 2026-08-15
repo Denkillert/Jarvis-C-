@@ -20,6 +20,8 @@ namespace Jarvis
         private bool _awaitingCommand = false;
         private System.Timers.Timer _responseTimer;
         private bool _isSpeaking = false;
+        public bool IsModelLoaded => _recognizer != null;
+        public string ModelPath { get; set; } = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", "ru", "vosk-model-small-ru-0.22");
 
         public event Action<string> OnCommandRecognized;
         public event Action OnWakeWordDetected;
@@ -242,6 +244,21 @@ namespace Jarvis
 
             await tcs.Task;
             System.Diagnostics.Debug.WriteLine("[Voice] Джарвис закончил говорить.");
+        }
+        public bool TryLoadModel(string path = null)
+        {
+            if (path != null) ModelPath = path;
+            if (_recognizer != null) return true;
+            try
+            {
+                if (!Directory.Exists(ModelPath)) return false;
+                _model = new Model(ModelPath);
+                _recognizer = new VoskRecognizer(_model, 16000.0f);
+                _recognizer.SetMaxAlternatives(0);
+                _recognizer.SetWords(false);
+                return true;
+            }
+            catch { return false; }
         }
 
         public void Dispose()
